@@ -4,7 +4,7 @@
 // commands (panel.py); schedules, modes, boosts and Home/Away/Holiday through
 // Hearth's own actions and entities, the same ones the cards use.
 
-const VERSION = "0.3.3";
+const VERSION = "0.3.4";
 const MAX_CHANGES = 6;
 const DAYS = [["weekdays", "Weekdays · Mon–Fri"], ["weekends", "Weekends · Sat–Sun"]];
 const HOUSE = [["home", "Home"], ["away", "Away"], ["holiday", "Holiday"]];
@@ -1073,5 +1073,7 @@ summary{cursor:pointer;min-height:36px;display:flex;align-items:center;color:var
 @media (max-width:600px){.wrap{padding:16px}.pills{flex-wrap:nowrap;overflow-x:auto;margin:0 -16px;padding:0 16px;scrollbar-width:none}.huge{font-size:52px}.tname{width:110px}}
 `;
 
-customElements.define("hearth-panel", HearthPanel);
-console.info(`%c HEARTH PANEL %c ${VERSION} `, "background:#ff8100;color:#fff", "");
+if (!customElements.get("hearth-panel")) {
+  customElements.define("hearth-panel", HearthPanel);
+  console.info(`%c HEARTH PANEL %c ${VERSION} `, "background:#ff8100;color:#fff", "");
+}
