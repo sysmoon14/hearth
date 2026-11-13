@@ -167,6 +167,7 @@ async def test_a_new_room_learns_from_the_boilers_history(hass: HomeAssistant, h
         await hass.async_block_till_done()
     zone = entry.runtime_data.zones["office"]
     assert zone.state.seeded
+    assert entry.runtime_data.seed_status.startswith("done: 2 times the boiler fired; warm-ups Office 2")
     # 2.5° in 80 minutes, and 1° in 40.
     assert [(w.rise, w.minutes) for w in zone.state.warmups] == [(1.0, 40.0), (2.5, 80.0)]
     room = hass.states.get(ROOM)
@@ -184,6 +185,7 @@ async def test_a_room_on_its_valves_reading_learns_but_isnt_seeded(hass: HomeAss
     recorder.assert_not_called()  # no sensor, no history to read
     zone = entry.runtime_data.zones["office"]
     assert zone.state.learned_with == "valves" and not zone.state.seeded
+    assert entry.runtime_data.seed_status == "not needed"
 
     await _tick(hass, freezer, "2026-11-13T07:00:30+00:00")
     assert hass.states.get(ROOM).attributes["calling_for_heat"]

@@ -49,6 +49,8 @@ from .zone import RadiatorZone, UnderfloorZone, Zone, ZoneState, make_zone
 _LOGGER = logging.getLogger(__name__)
 
 SIGNAL_UPDATE = f"{DOMAIN}_update"
+# The longest the recorder may take to answer before learning gives up.
+SEED_TIMEOUT = 120
 TICK = timedelta(seconds=30)
 
 
@@ -73,6 +75,7 @@ class Hearth:
         self._switch_sent: tuple[bool, float] | None = None
         self.last_boiler_command: str | None = None
         self._seeding: asyncio.Task | None = None
+        self.seed_status = "not needed"
 
     @property
     def boiler(self) -> str | None:
@@ -113,6 +116,7 @@ class Hearth:
         self.async_save()
         await self.async_evaluate()
         if any(z.sensor and not z.state.seeded for z in self.radiator_zones):
+            self.seed_status = "starting"
             self._seeding = self.hass.async_create_background_task(self._async_seed(), "hearth: learn warm-ups")
 
     async def async_stop(self) -> None:
@@ -173,37 +177,62 @@ class Hearth:
     async def _async_seed(self) -> None:
         """Read each new room's warm-ups from the recorder: every time the
         boiler fired, how far and how fast the room's sensor rose."""
+        try:
+            await self._seed()
+        except asyncio.CancelledError:
+            self.seed_status = "stopped before it finished"
+            raise
+        except Exception as err:  # noqa: BLE001 - learning live still works
+            self.seed_status = f"failed: {err!r}"
+            _LOGGER.warning("Couldn't learn how fast rooms warm from the history: %r", err)
+        _LOGGER.info("Learning from history: %s", self.seed_status)
+
+    async def _seed(self) -> None:
         rooms = [z for z in self.radiator_zones if z.sensor and not z.state.seeded]
         firing = [e for e in (self.boiler, self.boiler_switch) if e]
-        if not rooms or not firing or "recorder" not in self.hass.config.components:
+        if not rooms:
+            self.seed_status = "no rooms to learn"
+            return
+        if not firing:
+            self.seed_status = "no boiler thermostat or switch to read"
+            return
+        if "recorder" not in self.hass.config.components:
+            self.seed_status = "the recorder isn't running"
             return
         from homeassistant.components.recorder import get_instance, history  # noqa: PLC0415
 
         end = dt_util.utcnow()
         start = end - timedelta(days=SEED_DAYS)
         ids = list(dict.fromkeys([*firing, *(z.sensor for z in rooms)]))
-        try:
+        self.seed_status = f"reading the history of {', '.join(ids)}"
+        _LOGGER.debug("Learning from history: %s", self.seed_status)
+        async with asyncio.timeout(SEED_TIMEOUT):
             found: dict[str, list[State]] = await get_instance(self.hass).async_add_executor_job(
                 partial(
                     history.get_significant_states, self.hass, start, end, ids,
                     significant_changes_only=False, minimal_response=False, no_attributes=False,
                 )
             )
-        except Exception as err:  # noqa: BLE001 - learning live still works
-            _LOGGER.warning("Couldn't read the history to learn how fast rooms warm: %s", err)
-            return
+        counts = {e: len(found.get(e, [])) for e in ids}
+        _LOGGER.debug("Learning from history: rows %s", counts)
         spans = []
         for entity_id in firing:
             changes = [(s.last_updated, _firing(s)) for s in found.get(entity_id, [])]
             spans += preheat.spans_where(changes, end)
         periods = preheat.firing_periods(spans)
+        learned = {}
         for zone in rooms:
             if not zone.sensor or zone.state.seeded or zone.id not in self.zones:
                 continue
             readings = [(s.last_updated, v) for s in found.get(zone.sensor, []) if (v := _number(s.state)) is not None]
             warmups = preheat.warmups_from_history(periods, readings)
             zone.seed(warmups)
-            _LOGGER.info("%s: learned %d warm-ups from %d times the boiler fired", zone.name, len(warmups), len(periods))
+            learned[zone.name] = len(warmups)
+        self.seed_status = (
+            f"done: {len(periods)} times the boiler fired; warm-ups "
+            + ", ".join(f"{name} {n}" for name, n in learned.items())
+            + f"; rows read {counts}"
+        )
         async_dispatcher_send(self.hass, SIGNAL_UPDATE)
 
     # --- the house -------------------------------------------------------------
@@ -315,6 +344,7 @@ class Hearth:
             "boiler_switch": self.boiler_switch,
             "demand": self.demand,
             "last_boiler_command": self.last_boiler_command,
+            "learning_from_history": self.seed_status,
             "settings": {k: v for k, v in self.settings.items() if k != CONF_ZONES},
             "zones": {
                 zid: {

@@ -134,6 +134,7 @@ def _info(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, Any]:
         "house_mode": _own(hass, entry, "house_mode", "select"),
         "demand": _own(hass, entry, "radiator_demand", "binary_sensor"),
         "last_boiler_command": hub.last_boiler_command if hub else None,
+        "learning_from_history": hub.seed_status if hub else None,
         "card": f"{FRONTEND_URL}/{CARD_FILE}?v={VERSION}",
     }
 
