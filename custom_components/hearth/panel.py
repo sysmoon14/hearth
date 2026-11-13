@@ -1,0 +1,268 @@
+"""Hearth in Home Assistant's sidebar: every room, its schedule, and the
+house settings, in one place.
+
+One JS module (frontend/hearth-panel.js, no build step) and a few
+websocket commands. Rooms and house settings are saved to the entry's
+options, the same ones the options flow edits; schedules, modes, boosts
+and Home/Away/Holiday go through Hearth's own actions and entities.
+Admins only, as the options are.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import voluptuous as vol
+
+from homeassistant.components import frontend, websocket_api
+from homeassistant.config_entries import ConfigEntry, ConfigEntryState
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import config_validation as cv, entity_registry as er
+from homeassistant.util import slugify
+
+from .const import (
+    CARD_FILE,
+    CONF_AWAY_TEMP,
+    CONF_BACKUP_ZONE,
+    CONF_BOILER,
+    CONF_BOILER_OFF,
+    CONF_BOILER_ON,
+    CONF_BOILER_SWITCH,
+    CONF_BOOST_MINUTES,
+    CONF_BOOST_TEMP,
+    CONF_FALLBACK,
+    CONF_HOLIDAY_TEMP,
+    CONF_KIND,
+    CONF_NAME,
+    CONF_OFF_DELAY,
+    CONF_OFF_TEMP,
+    CONF_ON_DELAY,
+    CONF_PROFILE,
+    CONF_SENSOR,
+    CONF_STAT,
+    CONF_TRVS,
+    CONF_ZONE_ID,
+    CONF_ZONES,
+    DEFAULTS,
+    DOMAIN,
+    FRONTEND_URL,
+    KIND_RADIATOR,
+    KIND_UNDERFLOOR,
+    VERSION,
+)
+
+PANEL = "hearth"
+PANEL_FILE = "hearth-panel.js"
+
+# House settings the panel can change, and what each accepts.
+TEMPS = {
+    CONF_BOILER_ON: (15, 32), CONF_BOILER_OFF: (5, 18), CONF_FALLBACK: (5, 22),
+    CONF_BOOST_TEMP: (15, 28), CONF_AWAY_TEMP: (5, 22), CONF_HOLIDAY_TEMP: (5, 18),
+    CONF_OFF_TEMP: (5, 15),
+}
+SECONDS = {CONF_ON_DELAY: (0, 900), CONF_OFF_DELAY: (0, 1800), CONF_BOOST_MINUTES: (15, 240)}
+OPTIONAL_ENTITIES = (CONF_BOILER, CONF_BOILER_SWITCH)
+
+
+@callback
+def async_setup(hass: HomeAssistant) -> None:
+    """The panel's websocket commands, once."""
+    websocket_api.async_register_command(hass, ws_info)
+    websocket_api.async_register_command(hass, ws_save_room)
+    websocket_api.async_register_command(hass, ws_remove_room)
+    websocket_api.async_register_command(hass, ws_save_house)
+
+
+async def async_show(hass: HomeAssistant) -> None:
+    """The sidebar entry, while Hearth is set up."""
+    if "frontend" not in hass.config.components:
+        return
+    if PANEL in hass.data.get(frontend.DATA_PANELS, {}):
+        return
+    from homeassistant.components import panel_custom  # noqa: PLC0415
+
+    await panel_custom.async_register_panel(
+        hass, frontend_url_path=PANEL, webcomponent_name="hearth-panel", sidebar_title="Heating",
+        sidebar_icon="mdi:radiator", module_url=f"{FRONTEND_URL}/{PANEL_FILE}?v={VERSION}",
+        require_admin=True, config={},
+    )
+
+
+@callback
+def async_hide(hass: HomeAssistant) -> None:
+    if "frontend" in hass.config.components:
+        frontend.async_remove_panel(hass, PANEL, warn_if_unknown=False)
+
+
+def _entry(hass: HomeAssistant) -> ConfigEntry | None:
+    entries = hass.config_entries.async_entries(DOMAIN)
+    return entries[0] if entries else None
+
+
+def _room_entity(hass: HomeAssistant, entry: ConfigEntry, zone_id: str) -> str | None:
+    return er.async_get(hass).async_get_entity_id("climate", DOMAIN, f"{entry.entry_id}_{zone_id}")
+
+
+def _own(hass: HomeAssistant, entry: ConfigEntry, unique: str, domain: str) -> str | None:
+    return er.async_get(hass).async_get_entity_id(domain, DOMAIN, f"{entry.entry_id}_{unique}")
+
+
+def _find(hass: HomeAssistant, domain: str, suffix: str, platform: str | None = None) -> str | None:
+    """An entity by the end of its id, e.g. the Nest's heating control switch."""
+    for item in er.async_get(hass).entities.values():
+        if item.domain == domain and item.entity_id.endswith(suffix) and (platform is None or item.platform == platform):
+            return item.entity_id
+    return None
+
+
+def _info(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, Any]:
+    options = {**DEFAULTS, **entry.options}
+    hub = entry.runtime_data if entry.state is ConfigEntryState.LOADED else None
+    rooms = []
+    for zone in options.get(CONF_ZONES, []):
+        running = hub.zones.get(zone[CONF_ZONE_ID]) if hub else None
+        rooms.append({
+            "id": zone[CONF_ZONE_ID],
+            "name": zone[CONF_NAME],
+            "kind": zone.get(CONF_KIND, KIND_RADIATOR),
+            "entity_id": _room_entity(hass, entry, zone[CONF_ZONE_ID]),
+            "trvs": list(zone.get(CONF_TRVS) or []),
+            "sensor": zone.get(CONF_SENSOR),
+            "stat": zone.get(CONF_STAT),
+            "profile": zone.get(CONF_PROFILE),
+            "schedule": running.state.schedule if running else None,
+        })
+    return {
+        "entry_id": entry.entry_id,
+        "loaded": hub is not None,
+        "version": VERSION,
+        "rooms": rooms,
+        "settings": {k: options.get(k) for k in (*OPTIONAL_ENTITIES, CONF_BACKUP_ZONE, *TEMPS, *SECONDS)},
+        "house_mode": _own(hass, entry, "house_mode", "select"),
+        "demand": _own(hass, entry, "radiator_demand", "binary_sensor"),
+        # Fledge's switches, when there is a Fledge Nest.
+        "call_for_heat": _find(hass, "switch", "_call_for_heat", "fledge"),
+        "heat_control": _find(hass, "switch", "_heat_control"),
+        "last_boiler_command": hub.last_boiler_command if hub else None,
+        "card": f"{FRONTEND_URL}/{CARD_FILE}?v={VERSION}",
+    }
+
+
+@websocket_api.websocket_command({vol.Required("type"): "hearth/info"})
+@websocket_api.require_admin
+@callback
+def ws_info(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    entry = _entry(hass)
+    if entry is None:
+        connection.send_error(msg["id"], websocket_api.ERR_NOT_FOUND, "Hearth isn't set up")
+        return
+    connection.send_result(msg["id"], _info(hass, entry))
+
+
+def _unique_id(zones: list[dict[str, Any]], name: str, keep: str | None) -> str:
+    base = slugify(name) or "room"
+    taken = {z[CONF_ZONE_ID] for z in zones if z[CONF_ZONE_ID] != keep}
+    candidate, n = base, 2
+    while candidate in taken:
+        candidate, n = f"{base}_{n}", n + 1
+    return candidate
+
+
+ROOM = vol.Schema({
+    vol.Optional("id"): vol.Any(None, str),
+    vol.Required("name"): vol.All(str, vol.Strip, vol.Length(min=1, max=40)),
+    vol.Required("kind"): vol.In([KIND_RADIATOR, KIND_UNDERFLOOR]),
+    vol.Optional("trvs", default=[]): [cv.entity_id],
+    vol.Optional("sensor"): vol.Any(None, cv.entity_id),
+    vol.Optional("stat"): vol.Any(None, cv.entity_id),
+    vol.Optional("profile"): vol.Any(None, vol.All(str, vol.Strip, vol.Length(max=40))),
+})
+
+
+@websocket_api.websocket_command({vol.Required("type"): "hearth/save_room", vol.Required("room"): ROOM})
+@websocket_api.require_admin
+@callback
+def ws_save_room(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    """Add a room, or change one's name and devices."""
+    entry = _entry(hass)
+    if entry is None:
+        connection.send_error(msg["id"], websocket_api.ERR_NOT_FOUND, "Hearth isn't set up")
+        return
+    room = msg["room"]
+    zones = list(entry.options.get(CONF_ZONES, []))
+    keep = room.get("id")
+    if keep and not any(z[CONF_ZONE_ID] == keep for z in zones):
+        connection.send_error(msg["id"], websocket_api.ERR_NOT_FOUND, "No such room")
+        return
+    if room["kind"] == KIND_RADIATOR and not room["trvs"]:
+        connection.send_error(msg["id"], websocket_api.ERR_INVALID_FORMAT, "A radiator room needs at least one valve")
+        return
+    if room["kind"] == KIND_UNDERFLOOR and not room.get("stat"):
+        connection.send_error(msg["id"], websocket_api.ERR_INVALID_FORMAT, "An underfloor room needs its stat")
+        return
+    zone: dict[str, Any] = {CONF_ZONE_ID: keep or _unique_id(zones, room["name"], None),
+                            CONF_KIND: room["kind"], CONF_NAME: room["name"]}
+    if room.get("sensor"):
+        zone[CONF_SENSOR] = room["sensor"]
+    if room["kind"] == KIND_RADIATOR:
+        zone[CONF_TRVS] = room["trvs"]
+    else:
+        zone[CONF_STAT] = room["stat"]
+        zone[CONF_PROFILE] = room.get("profile") or f"Hearth {room['name']}"
+    zones = [zone if z[CONF_ZONE_ID] == zone[CONF_ZONE_ID] else z for z in zones]
+    if not keep:
+        zones.append(zone)
+    hass.config_entries.async_update_entry(entry, options={**entry.options, CONF_ZONES: zones})
+    connection.send_result(msg["id"], {"id": zone[CONF_ZONE_ID]})
+
+
+@websocket_api.websocket_command({vol.Required("type"): "hearth/remove_room", vol.Required("room_id"): str})
+@websocket_api.require_admin
+@callback
+def ws_remove_room(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    entry = _entry(hass)
+    if entry is None:
+        connection.send_error(msg["id"], websocket_api.ERR_NOT_FOUND, "Hearth isn't set up")
+        return
+    room_id = msg["room_id"]
+    zones = [z for z in entry.options.get(CONF_ZONES, []) if z[CONF_ZONE_ID] != room_id]
+    options = {**entry.options, CONF_ZONES: zones}
+    if options.get(CONF_BACKUP_ZONE) == room_id:
+        options.pop(CONF_BACKUP_ZONE)
+    hass.config_entries.async_update_entry(entry, options=options)
+    # The room's entity goes with it.
+    if entity_id := _room_entity(hass, entry, room_id):
+        er.async_get(hass).async_remove(entity_id)
+    connection.send_result(msg["id"], {})
+
+
+HOUSE = {
+    vol.Optional(CONF_BOILER): vol.Any(None, cv.entity_id),
+    vol.Optional(CONF_BOILER_SWITCH): vol.Any(None, cv.entity_id),
+    vol.Optional(CONF_BACKUP_ZONE): vol.Any(None, str),
+    **{vol.Optional(k): vol.All(vol.Coerce(float), vol.Range(min=lo, max=hi)) for k, (lo, hi) in TEMPS.items()},
+    **{vol.Optional(k): vol.All(vol.Coerce(int), vol.Range(min=lo, max=hi)) for k, (lo, hi) in SECONDS.items()},
+}
+
+
+@websocket_api.websocket_command({vol.Required("type"): "hearth/save_house", vol.Required("settings"): HOUSE})
+@websocket_api.require_admin
+@callback
+def ws_save_house(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    """The house settings it sends; None clears the boiler, switch or backup room."""
+    entry = _entry(hass)
+    if entry is None:
+        connection.send_error(msg["id"], websocket_api.ERR_NOT_FOUND, "Hearth isn't set up")
+        return
+    options = dict(entry.options)
+    zones = {z[CONF_ZONE_ID]: z for z in options.get(CONF_ZONES, [])}
+    for key, value in msg["settings"].items():
+        if key == CONF_BACKUP_ZONE and value and zones.get(value, {}).get(CONF_KIND) != KIND_RADIATOR:
+            connection.send_error(msg["id"], websocket_api.ERR_INVALID_FORMAT, "The backup room must be a radiator room")
+            return
+        if value is None:
+            options.pop(key, None)
+        else:
+            options[key] = value
+    hass.config_entries.async_update_entry(entry, options=options)
+    connection.send_result(msg["id"], {})

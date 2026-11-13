@@ -11,6 +11,7 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_TEMPERATURE
 from homeassistant.core import Context, Event, EventStateChangedData, HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import (
     async_call_later,
@@ -261,6 +262,11 @@ class Hearth:
         key = repr(heating)
         if key == self._backup_written:
             return
+        if _same_week(self._nest_schedule(), heating):
+            # The Nest already has it: a write would be for nothing, and a
+            # write is the one thing here that can disturb the Nest.
+            self._backup_written = key
+            return
         try:
             await self.hass.services.async_call(
                 "fledge", "set_schedule", {"entity_id": self.boiler, "heating": heating},
@@ -270,6 +276,19 @@ class Hearth:
             _LOGGER.warning("Couldn't write the Nest's backup schedule: %s", err)
             return
         self._backup_written = key
+
+    def _nest_schedule(self) -> dict[str, Any] | None:
+        """The heating schedule the boiler thermostat holds now, by day, from
+        Fledge's heating times sensor on the same device; None if unknown."""
+        registry = er.async_get(self.hass)
+        boiler = registry.async_get(self.boiler) if self.boiler else None
+        if boiler is None or not boiler.device_id:
+            return None
+        for entry in er.async_entries_for_device(registry, boiler.device_id):
+            if entry.domain == "sensor" and (entry.unique_id or "").endswith("_heating_times"):
+                state = self.hass.states.get(entry.entity_id)
+                return dict(state.attributes) if state is not None else None
+        return None
 
     async def _send_boiler(self, temp: float, force: bool = False) -> None:
         state = self.hass.states.get(self.boiler)
@@ -321,3 +340,17 @@ class Hearth:
 
 
 __all__ = ["Hearth", "SIGNAL_UPDATE", "KIND_RADIATOR", "HOUSE_AWAY"]
+
+
+def _same_week(held: dict[str, Any] | None, wanted: dict[str, list[dict[str, Any]]]) -> bool:
+    """Whether the schedule a Nest holds is the one Hearth would write."""
+    if held is None:
+        return False
+
+    def day(points: Any) -> list[tuple[str, float]] | None:
+        try:
+            return sorted((str(p["time"])[:5], float(p["temp"])) for p in points or [])
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    return all(day(held.get(d)) is not None and day(held.get(d)) == day(points) for d, points in wanted.items())

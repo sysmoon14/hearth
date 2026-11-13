@@ -221,3 +221,44 @@ async def test_asking_through_fledge(hass: HomeAssistant, house, calls, freezer)
     await hass.async_block_till_done()
     assert calls.of("fledge", "call_for_heat")[-1]["heat"] is True
     assert len(calls.of("fledge", "set_schedule")) == 2
+
+
+async def test_backup_schedule_the_nest_already_holds_is_not_written(hass: HomeAssistant, house, calls, freezer) -> None:
+    """A restart of Hearth mustn't write the Nest's schedule again for nothing:
+    a write is what can disturb the Nest while Hearth is asking for heat."""
+    from homeassistant.helpers import device_registry as dr, entity_registry as er
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    freezer.move_to(dt_util.as_utc(dt_util.parse_datetime("2026-11-13T07:30:00+00:00")))
+    mqtt = MockConfigEntry(domain="mqtt")
+    mqtt.add_to_hass(hass)
+    device = dr.async_get(hass).async_get_or_create(config_entry_id=mqtt.entry_id, identifiers={("mqtt", "nest")})
+    ent_reg = er.async_get(hass)
+    nest = hass.states.get(NEST)
+    hass.states.async_remove(NEST)  # or the registry would name it climate.nest_thermostat_2
+    ent_reg.async_get_or_create("climate", "mqtt", "nestlocal_s_climate", suggested_object_id="nest_thermostat",
+                                device_id=device.id, config_entry=mqtt)
+    ent_reg.async_get_or_create("sensor", "mqtt", "nestlocal_s_heating_times", suggested_object_id="nest_heating_times",
+                                device_id=device.id, config_entry=mqtt)
+    hass.states.async_set(NEST, nest.state, nest.attributes)
+    assert ent_reg.async_get(NEST) is not None
+    days = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+    hass.states.async_set("sensor.nest_heating_times", "0", {d: [] for d in days})
+    hass.states.async_set("switch.nest_call_for_heat", "off", {"rooms": []})
+
+    def _ask(d):
+        hass.states.async_set("switch.nest_call_for_heat", "on" if d["heat"] else "off", {"rooms": d["rooms"]})
+
+    calls.register("fledge", "call_for_heat", _ask)
+    calls.register("fledge", "set_schedule")
+    entry = await _setup(hass, calls, [OFFICE], boiler_switch="switch.nest_call_for_heat", backup_zone="office")
+    written = calls.of("fledge", "set_schedule")
+    assert len(written) == 1, "the Nest held something else: written"
+
+    # The Nest now holds it (as Fledge reports it: temps as numbers, any order).
+    hass.states.async_set("sensor.nest_heating_times", "1",
+                          {d: list(reversed(written[0]["heating"][d])) for d in days})
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert calls.of("fledge", "call_for_heat")[-1]["heat"] is True, "still asking after the restart"
+    assert len(calls.of("fledge", "set_schedule")) == 1, "not written again"
