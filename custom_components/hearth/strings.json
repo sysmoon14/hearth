@@ -70,8 +70,7 @@
           "away_temp": "Away: rooms held no warmer than",
           "holiday_temp": "Holiday: rooms kept above",
           "off_temp": "A room that's off is kept above",
-          "boiler_switch": "Fledge's Call for heat switch (instead of setting temperatures)",
-          "backup_zone": "Room whose schedule the Nest keeps for when Hearth isn't there"
+          "boiler_switch": "Call for heat switch (instead of setting the thermostat's temperature)"
         }
       }
     }

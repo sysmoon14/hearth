@@ -18,7 +18,7 @@ from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-NEST = "climate.nest_thermostat"
+THERMOSTAT = "climate.boiler_thermostat"
 OFFICE_TRV = "climate.office_trv"
 OFFICE_SENSOR = "sensor.office_temperature"
 KITCHEN = "climate.kitchen"
@@ -48,7 +48,7 @@ class Calls:
     def patch_climate(self) -> None:
         """Once the real climate and select services exist, send calls for the
         stand-in devices here and the rest (Hearth's own entities) to the real ones."""
-        fakes = {NEST, OFFICE_TRV, KITCHEN, "select.office_trv_temperature_sensor_select",
+        fakes = {THERMOSTAT, OFFICE_TRV, KITCHEN, "select.office_trv_temperature_sensor_select",
                  "select.kitchen_active_profile"}
         for domain, services in (
             ("climate", ("set_temperature", "set_preset_mode", "set_hvac_mode")),
@@ -116,9 +116,9 @@ async def calls(hass: HomeAssistant) -> Calls:
 
 @pytest.fixture
 async def house(hass: HomeAssistant) -> None:
-    """A Nest, one Sonoff valve with its companions, a room sensor, and a Heatmiser stat."""
+    """A boiler thermostat, one Sonoff valve with its companions, a room sensor, and a Heatmiser stat."""
     await hass.config.async_set_time_zone("Europe/London")
-    hass.states.async_set(NEST, "heat", {"temperature": 18.0, "current_temperature": 21.0, "preset_mode": "none"})
+    hass.states.async_set(THERMOSTAT, "heat", {"temperature": 18.0, "current_temperature": 21.0, "preset_mode": "none"})
     hass.states.async_set(OFFICE_SENSOR, "18.0", {"device_class": "temperature"})
 
     dev_reg, ent_reg = dr.async_get(hass), er.async_get(hass)
@@ -161,7 +161,7 @@ async def house(hass: HomeAssistant) -> None:
 def hearth_entry(hass: HomeAssistant, zones: list[dict], **options: Any) -> MockConfigEntry:
     entry = MockConfigEntry(
         domain="hearth", title="Hearth", data={},
-        options={"boiler": NEST, "demand_on_delay": 0, "demand_off_delay": 0, "zones": zones, **options},
+        options={"boiler": THERMOSTAT, "demand_on_delay": 0, "demand_off_delay": 0, "zones": zones, **options},
     )
     entry.add_to_hass(hass)
     return entry

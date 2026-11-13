@@ -23,7 +23,6 @@ from homeassistant.util import slugify
 from .const import (
     CARD_FILE,
     CONF_AWAY_TEMP,
-    CONF_BACKUP_ZONE,
     CONF_BOILER,
     CONF_BOILER_OFF,
     CONF_BOILER_ON,
@@ -107,14 +106,6 @@ def _own(hass: HomeAssistant, entry: ConfigEntry, unique: str, domain: str) -> s
     return er.async_get(hass).async_get_entity_id(domain, DOMAIN, f"{entry.entry_id}_{unique}")
 
 
-def _find(hass: HomeAssistant, domain: str, suffix: str, platform: str | None = None) -> str | None:
-    """An entity by the end of its id, e.g. the Nest's heating control switch."""
-    for item in er.async_get(hass).entities.values():
-        if item.domain == domain and item.entity_id.endswith(suffix) and (platform is None or item.platform == platform):
-            return item.entity_id
-    return None
-
-
 def _info(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, Any]:
     options = {**DEFAULTS, **entry.options}
     hub = entry.runtime_data if entry.state is ConfigEntryState.LOADED else None
@@ -137,12 +128,9 @@ def _info(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, Any]:
         "loaded": hub is not None,
         "version": VERSION,
         "rooms": rooms,
-        "settings": {k: options.get(k) for k in (*OPTIONAL_ENTITIES, CONF_BACKUP_ZONE, *TEMPS, *SECONDS)},
+        "settings": {k: options.get(k) for k in (*OPTIONAL_ENTITIES, *TEMPS, *SECONDS)},
         "house_mode": _own(hass, entry, "house_mode", "select"),
         "demand": _own(hass, entry, "radiator_demand", "binary_sensor"),
-        # Fledge's switches, when there is a Fledge Nest.
-        "call_for_heat": _find(hass, "switch", "_call_for_heat", "fledge"),
-        "heat_control": _find(hass, "switch", "_heat_control"),
         "last_boiler_command": hub.last_boiler_command if hub else None,
         "card": f"{FRONTEND_URL}/{CARD_FILE}?v={VERSION}",
     }
@@ -227,8 +215,6 @@ def ws_remove_room(hass: HomeAssistant, connection: websocket_api.ActiveConnecti
     room_id = msg["room_id"]
     zones = [z for z in entry.options.get(CONF_ZONES, []) if z[CONF_ZONE_ID] != room_id]
     options = {**entry.options, CONF_ZONES: zones}
-    if options.get(CONF_BACKUP_ZONE) == room_id:
-        options.pop(CONF_BACKUP_ZONE)
     hass.config_entries.async_update_entry(entry, options=options)
     # The room's entity goes with it.
     if entity_id := _room_entity(hass, entry, room_id):
@@ -239,7 +225,6 @@ def ws_remove_room(hass: HomeAssistant, connection: websocket_api.ActiveConnecti
 HOUSE = {
     vol.Optional(CONF_BOILER): vol.Any(None, cv.entity_id),
     vol.Optional(CONF_BOILER_SWITCH): vol.Any(None, cv.entity_id),
-    vol.Optional(CONF_BACKUP_ZONE): vol.Any(None, str),
     **{vol.Optional(k): vol.All(vol.Coerce(float), vol.Range(min=lo, max=hi)) for k, (lo, hi) in TEMPS.items()},
     **{vol.Optional(k): vol.All(vol.Coerce(int), vol.Range(min=lo, max=hi)) for k, (lo, hi) in SECONDS.items()},
 }
@@ -249,17 +234,13 @@ HOUSE = {
 @websocket_api.require_admin
 @callback
 def ws_save_house(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
-    """The house settings it sends; None clears the boiler, switch or backup room."""
+    """The house settings it sends; None clears the boiler or switch."""
     entry = _entry(hass)
     if entry is None:
         connection.send_error(msg["id"], websocket_api.ERR_NOT_FOUND, "Hearth isn't set up")
         return
     options = dict(entry.options)
-    zones = {z[CONF_ZONE_ID]: z for z in options.get(CONF_ZONES, [])}
     for key, value in msg["settings"].items():
-        if key == CONF_BACKUP_ZONE and value and zones.get(value, {}).get(CONF_KIND) != KIND_RADIATOR:
-            connection.send_error(msg["id"], websocket_api.ERR_INVALID_FORMAT, "The backup room must be a radiator room")
-            return
         if value is None:
             options.pop(key, None)
         else:

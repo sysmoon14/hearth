@@ -4,7 +4,7 @@
 // commands (panel.py); schedules, modes, boosts and Home/Away/Holiday through
 // Hearth's own actions and entities, the same ones the cards use.
 
-const VERSION = "0.2.0";
+const VERSION = "0.3.0";
 const MAX_CHANGES = 6;
 const DAYS = [["weekdays", "Weekdays · Mon–Fri"], ["weekends", "Weekends · Sat–Sun"]];
 const HOUSE = [["home", "Home"], ["away", "Away"], ["holiday", "Holiday"]];
@@ -78,7 +78,7 @@ class HearthPanel extends HTMLElement {
 
   _watched() {
     const i = this._info;
-    return [i.house_mode, i.demand, i.call_for_heat, i.heat_control, i.settings.boiler,
+    return [i.house_mode, i.demand, i.settings.boiler, i.settings.boiler_switch,
       ...i.rooms.flatMap((r) => [r.entity_id, ...r.trvs, r.stat, r.sensor])].filter(Boolean);
   }
 
@@ -278,13 +278,13 @@ class HearthPanel extends HTMLElement {
       const asking = demand?.attributes?.rooms_asking || [];
       const on = demand?.state === "on";
       const sw = this._state(i.settings.boiler_switch);
-      const viaFledge = i.settings.boiler_switch && sw && ["on", "off"].includes(sw.state);
       const boiler = this._state(i.settings.boiler);
       const firing = boiler?.attributes?.hvac_action === "heating";
       let how;
-      if (!i.settings.boiler) how = "No boiler thermostat chosen yet: set one on the House tab";
-      else if (viaFledge) how = `Asking the Nest through Fledge's Call for heat${firing ? " · boiler firing" : ""}`;
-      else if (i.settings.boiler_switch) how = `Call for heat is unavailable, so Hearth sets ${esc(boiler?.attributes?.friendly_name || "the thermostat")} to ${deg(i.settings.boiler_on_temp)} / ${deg(i.settings.boiler_off_temp)}`;
+      if (i.settings.boiler_switch) how = sw && ["on", "off"].includes(sw.state)
+        ? `${esc(this._name(i.settings.boiler_switch))} is ${sw.state}`
+        : `${esc(this._name(i.settings.boiler_switch))} is unavailable, so the boiler can't be asked`;
+      else if (!i.settings.boiler) how = "Nothing switches the boiler yet: choose a switch or thermostat on the House tab";
       else how = `Setting ${esc(boiler?.attributes?.friendly_name || "the thermostat")} to ${deg(i.settings.boiler_on_temp)} / ${deg(i.settings.boiler_off_temp)}${firing ? " · boiler firing" : ""}`;
       cards.push(`<div class="card status-card ${on ? "hot" : ""}">
         <div class="row between"><span class="caps">Radiators</span><span class="chip ${on ? "heat" : "ok"}">${on ? "Calling" : "Idle"}</span></div>
@@ -298,15 +298,12 @@ class HearthPanel extends HTMLElement {
         <div class="big">${heating.length ? `${esc(heating.join(", "))} heating` : ufh.length > 1 ? "All comfortable" : "Comfortable"}</div>
         <div class="muted small">The neoHub runs ${esc(ufh.map((r) => r.name).join(", "))} from the profiles Hearth wrote</div></div>`);
     }
-    if (rads.length && i.settings.boiler) {
-      const backup = i.settings.backup_zone && this._roomById(i.settings.backup_zone);
-      const fledge = i.settings.boiler_switch && this._state(i.heat_control)?.state === "on";
-      const big = fledge ? (backup ? `Nest runs ${esc(backup.name)}'s schedule` : "Nest runs its own schedule") : `Thermostat left at ${deg(i.settings.fallback_temp)}`;
-      const covered = !fledge || backup;
+    if (rads.length && (i.settings.boiler_switch || i.settings.boiler)) {
+      const big = i.settings.boiler_switch ? "Call for heat turned off" : `Thermostat left at ${deg(i.settings.fallback_temp)}`;
       cards.push(`<div class="card status-card">
-        <div class="row between"><span class="caps">If Home Assistant stops</span><span class="chip ${covered ? "ok" : "warn"}">${covered ? "Covered" : "Pick a backup room"}</span></div>
+        <div class="row between"><span class="caps">If Hearth stops</span><span class="chip ok">Covered</span></div>
         <div class="big">${big}</div>
-        <div class="muted small">${fledge ? "After 10 minutes without an ask" : "So the house can't go cold"}${ufh.length ? " · the stats carry on as they are" : ""}</div></div>`);
+        <div class="muted small">${i.settings.boiler_switch ? "What happens then is up to whatever the switch drives" : "So the house can't go cold"}${ufh.length ? " · the stats carry on as they are" : ""}</div></div>`);
     }
     return cards.join("");
   }
@@ -349,7 +346,6 @@ class HearthPanel extends HTMLElement {
         <span class="${online(id) ? "good" : "bad"}">${online(id) ? "Online" : "Offline"}</span></div>`;
     }).join("");
     const sensor = room.sensor ? this._state(room.sensor) : null;
-    const backup = this._info.settings.backup_zone === room.id;
     return `<div class="wrap split">
       <div class="main stack">
         <section class="card nowcard">
@@ -385,7 +381,6 @@ class HearthPanel extends HTMLElement {
         <div class="kv"><span>Room temperature<span class="sub">${room.sensor ? esc(this._name(room.sensor)) + (room.kind === "radiator" ? ", fed to the valve" : "") : room.kind === "radiator" ? "The valve's own: it sits on the radiator and reads high" : "The stat's own"}</span></span><span>${sensor ? deg(sensor.state) : deg(a.current_temperature)}</span></div>
         ${room.kind === "radiator" ? `<div class="kv"><span>Turning the valve by hand<span class="sub">Counts the same as − or +</span></span><span>On</span></div>` : ""}
         <div class="kv"><span>Away · Holiday<span class="sub">Set on the House tab</span></span><span>${deg(this._info.settings.away_temp)} · ${deg(this._info.settings.holiday_temp)}</span></div>
-        ${backup ? `<div class="kv"><span>The Nest's backup<span class="sub">The Nest keeps this room's schedule as its own</span></span><span class="good">Yes</span></div>` : ""}
         <div class="row flexwrap" style="padding-top:12px">
           <button class="btn" data-act="edit-schedule" data-id="${esc(room.id)}">Edit schedule</button>
           <button class="btn" data-act="edit" data-id="${esc(room.id)}">Change devices</button>
@@ -470,7 +465,7 @@ class HearthPanel extends HTMLElement {
     const mode = { auto: "Schedule", heat: `Fixed ${deg(st?.attributes?.temperature)}`, off: "Off" }[st?.state] || "unavailable";
     const ufh = room.kind === "underfloor";
     return `<div class="wrap stack">
-      <div class="row flexwrap" role="group" aria-label="Room">${rooms.map((r) =>
+      <div class="pills" role="group" aria-label="Room">${rooms.map((r) =>
         `<button class="pill ${r.id === s.zone ? "on" : ""}" data-act="sched-room" data-id="${esc(r.id)}" aria-pressed="${r.id === s.zone}">${esc(r.name)}</button>`).join("")}</div>
       <div class="split">
         <section class="card main stack">
@@ -519,9 +514,7 @@ class HearthPanel extends HTMLElement {
     if (!this._house) this._house = copy(i.settings);
     const h = this._house;
     const dirty = JSON.stringify(h) !== JSON.stringify(i.settings);
-    const rads = i.rooms.filter((r) => r.kind === "radiator");
     const sw = this._state(h.boiler_switch);
-    const hc = this._state(i.heat_control);
     const demand = this._state(i.demand);
     const boiler = this._state(h.boiler);
     const swOk = sw && ["on", "off"].includes(sw.state);
@@ -536,25 +529,20 @@ class HearthPanel extends HTMLElement {
             <span class="chip ${demand?.state === "on" ? "heat" : "ok"}">${demand?.state === "on" ? `Asking · ${esc((demand.attributes.rooms_asking || []).join(", "))}` : "Idle"}</span></div>
           <div class="flow" aria-label="How a room's ask reaches the boiler">
             <span class="node">A room below target</span><span aria-hidden="true">→</span>
-            ${h.boiler_switch ? `<span class="node">Fledge: Call for heat</span><span aria-hidden="true">→</span>` : ""}
-            <span class="node">${esc(boiler?.attributes?.friendly_name || "Boiler thermostat")}</span><span aria-hidden="true">→</span>
+            <span class="node">${esc(h.boiler_switch ? this._name(h.boiler_switch) : boiler?.attributes?.friendly_name || "Boiler thermostat")}</span><span aria-hidden="true">→</span>
             <span class="node">Boiler</span></div>
           <div>
-            <div class="kv"><span>Boiler thermostat<span class="sub">The thermostat that switches the boiler for the radiators</span></span><span class="pick">${this._entityField("boiler", "climate", "Thermostat", h.boiler)}</span></div>
-            <div class="kv"><span>Ask through Fledge<span class="sub">${i.call_for_heat ? (h.boiler_switch ? (swOk ? `Connected${i.last_boiler_command ? ` · last: ${esc(i.last_boiler_command)}` : ""}` : "Unavailable: Hearth sets temperatures meanwhile") : "Fledge's Call for heat switch was found") : "Needs a Nest running Fledge"}</span></span>
-              <span class="pick">${this._entityField("boiler_switch", "switch", "Call for heat switch", h.boiler_switch)}</span></div>
-            ${i.heat_control ? `<div class="kv"><span>Heating control by Home Assistant<span class="sub">On the Nest: off, it ignores Call for heat and runs its own schedule</span></span>
-              <button class="switch ${hc?.state === "on" ? "on" : ""}" data-act="heat-control" role="switch" aria-checked="${hc?.state === "on"}" aria-label="Heating control by Home Assistant"><span></span></button></div>` : ""}
-            <div class="kv"><label for="h-backup">Backup room<span class="sub">${h.boiler_switch ? "The Nest keeps this room's schedule for when Hearth is gone" : "Used with Fledge's Call for heat"}</span></label>
-              <select id="h-backup" data-house="backup_zone"><option value="">None</option>${rads.map((r) => `<option value="${esc(r.id)}" ${h.backup_zone === r.id ? "selected" : ""}>${esc(r.name)}</option>`).join("")}</select></div>
+            <div class="kv"><span>Call for heat switch<span class="sub">${h.boiler_switch ? (swOk ? `On while a room wants heat, off otherwise${i.last_boiler_command ? ` · last: ${esc(i.last_boiler_command)}` : ""}` : "Unavailable: Hearth can't ask for heat until it's back") : "Any on/off switch that fires the boiler. Leave empty to use a thermostat instead"}</span></span>
+              <span class="pick">${this._entityField("boiler_switch", "switch,input_boolean", "Call for heat switch", h.boiler_switch)}</span></div>
+            ${h.boiler_switch ? "" : `<div class="kv"><span>Boiler thermostat<span class="sub">Without a switch: Hearth turns this thermostat up and down to switch the boiler</span></span><span class="pick">${this._entityField("boiler", "climate", "Thermostat", h.boiler)}</span></div>`}
             ${secRow("demand_on_delay", "Wait before heating", "So the boiler doesn't flick on as valves settle", 0, 900, "s", 1)}
             ${secRow("demand_off_delay", "Wait before stopping", "", 0, 1800, "s", 1)}
           </div>
-          <details><summary>Without Fledge: the temperatures Hearth sets on the thermostat</summary>
+          ${h.boiler_switch ? "" : `<details><summary>The temperatures Hearth sets on the thermostat</summary>
             ${tempRow("boiler_on_temp", "When heat is wanted", "", 15, 32)}
             ${tempRow("boiler_off_temp", "When it isn't", "", 5, 18)}
             ${tempRow("fallback_temp", "If Hearth stops", "So the house can't go cold", 5, 22)}
-          </details>
+          </details>`}
         </section>
         <section class="card stack">
           <div class="row between flexwrap"><h2>Rooms</h2><button class="btn solid" data-act="add">Add a room</button></div>
@@ -600,7 +588,7 @@ class HearthPanel extends HTMLElement {
     if (this._pickers) {
       return `<ha-entity-picker data-pick="${esc(key)}" data-domain="${domain}" data-class="${esc(deviceClass)}" data-label="${esc(label)}" data-value="${esc(value || "")}"></ha-entity-picker>`;
     }
-    const ids = Object.keys(this._hass.states).filter((id) => id.split(".")[0] === domain
+    const ids = Object.keys(this._hass.states).filter((id) => domain.split(",").includes(id.split(".")[0])
       && (!deviceClass || this._hass.states[id].attributes.device_class === deviceClass)).sort();
     return `<select data-pick-select="${esc(key)}" aria-label="${esc(label)}"><option value="">None</option>${ids.map((id) =>
       `<option value="${esc(id)}" ${id === value ? "selected" : ""}>${esc(this._name(id))}</option>`).join("")}</select>`;
@@ -750,11 +738,6 @@ class HearthPanel extends HTMLElement {
       case "edit": this._openDialog(room); return;
       case "add": this._openDialog(null); return;
       case "remove": this._removeRoom(room); return;
-      case "heat-control": {
-        const on = this._state(this._info.heat_control)?.state === "on";
-        this._call("switch", on ? "turn_off" : "turn_on", { entity_id: this._info.heat_control });
-        return;
-      }
       case "house-save": this._saveHouse(); return;
       case "house-discard": this._house = null; this._render(); return;
       default: break;
@@ -772,8 +755,7 @@ class HearthPanel extends HTMLElement {
     }
     if (t.dataset.house) {
       const key = t.dataset.house;
-      if (key === "backup_zone") this._house[key] = t.value || null;
-      else this._house[key] = Number(t.value) * Number(t.dataset.scale || 1);
+      this._house[key] = Number(t.value) * Number(t.dataset.scale || 1);
       this._render();
       return;
     }
@@ -990,7 +972,8 @@ p{margin:0;line-height:1.45}
 .seg{display:inline-flex;padding:3px;gap:2px;border:1px solid var(--hp-line);border-radius:20px;flex-wrap:wrap}
 .seg button{min-height:34px;padding:0 16px;border:0;border-radius:17px;background:transparent;color:var(--secondary-text-color);font:inherit;font-size:14px;cursor:pointer}
 .seg button.on{background:color-mix(in srgb,var(--primary-color) 20%,transparent);color:var(--primary-color);font-weight:500}
-.pill{min-height:44px;padding:0 18px;border-radius:22px;border:1px solid var(--hp-line);background:var(--hp-card);color:var(--primary-text-color);font:inherit;font-size:14px;cursor:pointer}
+.pills{display:flex;gap:8px;flex-wrap:wrap}
+.pill{flex:none;min-height:40px;padding:0 18px;border-radius:22px;border:1px solid var(--hp-line);background:var(--hp-card);color:var(--primary-text-color);font:inherit;font-size:14px;cursor:pointer}
 .pill.on{border-color:var(--primary-color);background:color-mix(in srgb,var(--primary-color) 16%,transparent);color:var(--primary-color);font-weight:500}
 .status{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}
 .status-card{display:flex;flex-direction:column;gap:8px}
@@ -1063,7 +1046,7 @@ summary{cursor:pointer;min-height:36px;display:flex;align-items:center;color:var
 .field{display:flex;flex-direction:column;gap:6px;font-size:13px;color:var(--secondary-text-color)}
 .field input{font-size:15px}
 .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--primary-text-color);color:var(--primary-background-color);padding:12px 20px;border-radius:8px;font-size:14px;z-index:6;max-width:calc(100% - 32px)}
-@media (max-width:600px){.wrap{padding:16px}.huge{font-size:52px}.tname{width:110px}}
+@media (max-width:600px){.wrap{padding:16px}.pills{flex-wrap:nowrap;overflow-x:auto;margin:0 -16px;padding:0 16px;scrollbar-width:none}.huge{font-size:52px}.tname{width:110px}}
 `;
 
 customElements.define("hearth-panel", HearthPanel);

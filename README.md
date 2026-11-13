@@ -29,9 +29,8 @@ The house has one more control, **Home / Away / Holiday**:
 **Radiator rooms (Sonoff TRVZB and other Zigbee2MQTT valves).** Home Assistant runs the schedule.
 - Hearth sets each valve's target and puts the valve in plain heat mode, so the valve's own weekly schedule never runs.
 - It feeds the valve the room's real temperature from a sensor elsewhere in the room, because a valve's own sensor sits on a hot radiator.
-- It switches the boiler: when any radiator room wants heat, the boiler thermostat (a Nest, for example) is set to 25°; when none does, it's set to 10°. Short delays stop it switching on and off as valves settle.
-- If Hearth stops, the boiler thermostat is left at 17° so the house can't go cold.
-- **With a Fledge Nest**, choose its **Call for heat** switch in House settings instead: Hearth asks through it rather than setting temperatures, the Nest's screen says which rooms are asking, and if Hearth stops the Nest goes back to its own schedule by itself. Pick a **backup room** and Hearth keeps the Nest's own schedule as that room's, so the fallback is sensible.
+- It calls for heat. With a **Call for heat switch** (any on/off `switch` or `input_boolean`: a boiler relay, or a thermostat's own call-for-heat switch), the switch is on while any radiator room wants heat and off otherwise; if Hearth stops, it's turned off. Without one, the boiler thermostat is set to 25° when heat is wanted and 10° when it isn't, and left at 17° if Hearth stops so the house can't go cold. Short delays stop it switching on and off as valves settle.
+- `binary_sensor.hearth_radiators_want_heat` carries the same on/off, with the rooms asking in `rooms_asking`, for anything else that wants to follow it.
 
 **Underfloor rooms (Heatmiser neoStats, through the [heatmiserneo](https://github.com/MindrustUK/Heatmiser-for-home-assistant) integration).** The stat runs the schedule itself.
 - Hearth writes the schedule to the neoHub as a 5/2-day profile (`Hearth Kitchen`, `Hearth Kitchen Fixed`, `Hearth Kitchen Off`) and makes the stat run it.
@@ -43,14 +42,14 @@ The house has one more control, **Home / Away / Holiday**:
 
 1. Open HACS, then ⋮ → Custom repositories. Add `https://github.com/sysmoon14/hearth` as an Integration.
 2. Download **Hearth** and restart Home Assistant.
-3. Go to Settings → Devices & services → Add integration → **Hearth**, and choose the thermostat that switches the boiler for your radiators.
+3. Go to Settings → Devices & services → Add integration → **Hearth**, and choose the thermostat that switches the boiler for your radiators (or leave it and pick a Call for heat switch in House settings).
 4. Open **Hearth** in the sidebar (admins only) to add rooms, edit every room's schedule and change the house settings.
 
 ## The Hearth panel
 
-- **Rooms:** Home / Away / Holiday, what the boiler and the underfloor are doing, what happens if Home Assistant stops, a card per room with its "why" line, and every room's day on one strip. Open a room for its controls, today's temperature against its target, and its devices.
+- **Rooms:** Home / Away / Holiday, what the boiler and the underfloor are doing, what happens if Hearth stops, a card per room with its "why" line, and every room's day on one strip. Open a room for its controls, today's temperature against its target, and its devices.
 - **Schedules:** one editor for every room: weekdays and weekends, up to six changes a day, copy to the other days or to other rooms.
-- **House:** the boiler thermostat, Fledge's Call for heat and the Nest's heating control, the backup room, delays, Away / Holiday / Boost temperatures, and the rooms with their devices. Add a room walks you through its valves or stat and where its temperature comes from.
+- **House:** the Call for heat switch or boiler thermostat, delays, Away / Holiday / Boost temperatures, and the rooms with their devices. Add a room walks you through its valves or stat and where its temperature comes from.
 
 The integration's **Configure** still works too.
 

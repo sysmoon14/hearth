@@ -11,7 +11,6 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_TEMPERATURE
 from homeassistant.core import Context, Event, EventStateChangedData, HomeAssistant, callback
-from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import (
     async_call_later,
@@ -22,7 +21,6 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .const import (
-    CONF_BACKUP_ZONE,
     CONF_BOILER,
     CONF_BOILER_SWITCH,
     CONF_BOILER_OFF,
@@ -68,8 +66,7 @@ class Hearth:
         self._raw_demand = False
         self._raw_since = monotonic.monotonic()
         self._boiler_sent: tuple[float, float] | None = None
-        self._asked: tuple[bool, tuple[str, ...]] | None = None
-        self._backup_written: str | None = None
+        self._switch_sent: tuple[bool, float] | None = None
         self.last_boiler_command: str | None = None
 
     @property
@@ -79,13 +76,6 @@ class Hearth:
     @property
     def boiler_switch(self) -> str | None:
         return self.settings.get(CONF_BOILER_SWITCH) or None
-
-    def _asking_through_switch(self) -> bool:
-        """Whether the Fledge switch can take the ask right now."""
-        if not self.boiler_switch:
-            return False
-        state = self.hass.states.get(self.boiler_switch)
-        return state is not None and state.state in ("on", "off")
 
     @property
     def radiator_zones(self) -> list[RadiatorZone]:
@@ -109,8 +99,7 @@ class Hearth:
             await zone.async_start()
 
         watched = {e for z in self.zones.values() for e in z.watched_entities()}
-        if self.boiler:
-            watched.add(self.boiler)
+        watched.update(e for e in (self.boiler, self.boiler_switch) if e)
         if watched:
             self._unsubs.append(
                 async_track_state_change_event(self.hass, list(watched), self._state_changed)
@@ -120,15 +109,18 @@ class Hearth:
         await self.async_evaluate()
 
     async def async_stop(self) -> None:
-        """Hand the boiler back to the Nest's own judgement at a safe level."""
+        """Leave the boiler safe: the switch off, or the thermostat at a safe level."""
         for unsub in self._unsubs:
             unsub()
         self._unsubs.clear()
         if self._eval_pending:
             self._eval_pending()
-        # With Fledge's switch the Nest goes back to its own schedule by
-        # itself when the asks stop; without, leave it at a safe temperature.
-        if self.boiler and self.radiator_zones and not self.boiler_switch:
+        if not self.radiator_zones:
+            return
+        if self.boiler_switch:
+            # Nothing will turn it off once Hearth has gone.
+            await self._send_switch(False, force=True)
+        elif self.boiler:
             await self._send_boiler(float(self.settings[CONF_FALLBACK]), force=True)
 
     # --- storage ------------------------------------------------------------
@@ -207,7 +199,7 @@ class Hearth:
         return [z.name for z in self.radiator_zones if z.calling]
 
     async def _update_boiler(self) -> None:
-        if not self.boiler or not self.radiator_zones:
+        if not (self.boiler_switch or self.boiler) or not self.radiator_zones:
             return
         raw = any(z.calling for z in self.radiator_zones)
         clock = monotonic.monotonic()
@@ -218,77 +210,30 @@ class Hearth:
             self.demand = True
         elif not raw and self.demand and held >= float(self.settings[CONF_OFF_DELAY]):
             self.demand = False
-        through_switch = self._asking_through_switch()
-        if through_switch and self._boiler_sent is not None:
-            # Back from setting temperatures while the switch was away: write
-            # the backup schedule again, which also puts the Nest's own
-            # setpoint back from the 25°/10° it was left at.
-            self._boiler_sent = None
-            self._backup_written = None
-        if through_switch:
-            await self._ask_switch(self.demand, tuple(self.zones_calling()) if self.demand else ())
+        if self.boiler_switch:
+            await self._send_switch(self.demand)
         else:
             temp = float(self.settings[CONF_BOILER_ON] if self.demand else self.settings[CONF_BOILER_OFF])
             await self._send_boiler(temp)
-        await self._write_backup_schedule()
 
-    async def _ask_switch(self, heat: bool, rooms: tuple[str, ...]) -> None:
-        """Through Fledge's Call for heat: it renews the ask itself."""
+    async def _send_switch(self, on: bool, force: bool = False) -> None:
+        """Call for heat by turning the switch on, or stop by turning it off."""
         state = self.hass.states.get(self.boiler_switch)
-        current = (state.state == "on", tuple(state.attributes.get("rooms") or ()))
-        if current == (heat, rooms) and self._asked == (heat, rooms):
+        if state is None or state.state not in ("on", "off"):
             return
-        self._asked = (heat, rooms)
-        self.last_boiler_command = f"{'heat' if heat else 'no heat'} at {dt_util.now().strftime('%H:%M:%S')}"
+        if not force and state.state == ("on" if on else "off"):
+            return
+        if not force and self._switch_sent and self._switch_sent[0] == on and monotonic.monotonic() - self._switch_sent[1] < 60:
+            return
+        self._switch_sent = (on, monotonic.monotonic())
+        self.last_boiler_command = f"{'on' if on else 'off'} at {dt_util.now().strftime('%H:%M:%S')}"
         try:
             await self.hass.services.async_call(
-                "fledge", "call_for_heat",
-                {"entity_id": self.boiler_switch, "heat": heat, "rooms": list(rooms)},
+                self.boiler_switch.split(".")[0], "turn_on" if on else "turn_off", {"entity_id": self.boiler_switch},
                 blocking=True, context=self.context,
             )
         except Exception as err:  # noqa: BLE001
-            self._asked = None
-            _LOGGER.warning("Couldn't ask the Nest for heat: %s", err)
-
-    async def _write_backup_schedule(self) -> None:
-        """Keep the boiler thermostat's own schedule as the backup room's, so
-        it runs something sensible if Hearth isn't there."""
-        zone = self.zones.get(self.settings.get(CONF_BACKUP_ZONE) or "")
-        if zone is None or not self.boiler or not self.boiler_switch:
-            return
-        week, weekend = zone.state.schedule["weekdays"], zone.state.schedule["weekends"]
-        heating = {day: week for day in ("mon", "tue", "wed", "thu", "fri")}
-        heating.update({day: weekend for day in ("sat", "sun")})
-        key = repr(heating)
-        if key == self._backup_written:
-            return
-        if _same_week(self._nest_schedule(), heating):
-            # The Nest already has it: a write would be for nothing, and a
-            # write is the one thing here that can disturb the Nest.
-            self._backup_written = key
-            return
-        try:
-            await self.hass.services.async_call(
-                "fledge", "set_schedule", {"entity_id": self.boiler, "heating": heating},
-                blocking=True, context=self.context,
-            )
-        except Exception as err:  # noqa: BLE001
-            _LOGGER.warning("Couldn't write the Nest's backup schedule: %s", err)
-            return
-        self._backup_written = key
-
-    def _nest_schedule(self) -> dict[str, Any] | None:
-        """The heating schedule the boiler thermostat holds now, by day, from
-        Fledge's heating times sensor on the same device; None if unknown."""
-        registry = er.async_get(self.hass)
-        boiler = registry.async_get(self.boiler) if self.boiler else None
-        if boiler is None or not boiler.device_id:
-            return None
-        for entry in er.async_entries_for_device(registry, boiler.device_id):
-            if entry.domain == "sensor" and (entry.unique_id or "").endswith("_heating_times"):
-                state = self.hass.states.get(entry.entity_id)
-                return dict(state.attributes) if state is not None else None
-        return None
+            _LOGGER.warning("Couldn't turn %s %s: %s", self.boiler_switch, "on" if on else "off", err)
 
     async def _send_boiler(self, temp: float, force: bool = False) -> None:
         state = self.hass.states.get(self.boiler)
@@ -322,7 +267,6 @@ class Hearth:
             "house_mode": self.house_mode,
             "boiler": self.boiler,
             "boiler_switch": self.boiler_switch,
-            "backup_zone": self.settings.get(CONF_BACKUP_ZONE),
             "demand": self.demand,
             "last_boiler_command": self.last_boiler_command,
             "settings": {k: v for k, v in self.settings.items() if k != CONF_ZONES},
@@ -341,16 +285,3 @@ class Hearth:
 
 __all__ = ["Hearth", "SIGNAL_UPDATE", "KIND_RADIATOR", "HOUSE_AWAY"]
 
-
-def _same_week(held: dict[str, Any] | None, wanted: dict[str, list[dict[str, Any]]]) -> bool:
-    """Whether the schedule a Nest holds is the one Hearth would write."""
-    if held is None:
-        return False
-
-    def day(points: Any) -> list[tuple[str, float]] | None:
-        try:
-            return sorted((str(p["time"])[:5], float(p["temp"])) for p in points or [])
-        except (KeyError, TypeError, ValueError):
-            return None
-
-    return all(day(held.get(d)) is not None and day(held.get(d)) == day(points) for d, points in wanted.items())

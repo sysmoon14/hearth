@@ -12,7 +12,7 @@ from pytest_homeassistant_custom_component.common import async_fire_time_changed
 from .conftest import (
     KITCHEN,
     KITCHEN_ZONE,
-    NEST,
+    THERMOSTAT,
     OFFICE,
     OFFICE_SENSOR,
     OFFICE_TRV,
@@ -51,7 +51,7 @@ async def test_radiator_room_calls_for_heat(hass: HomeAssistant, house, calls, f
     assert calls.of("number", "set_value")[-1] == {"entity_id": "number.office_trv_external_temperature_input", "value": 18.0}
     assert hass.states.get("select.office_trv_temperature_sensor_select").state == "remote_temperature"
     # The boiler is on.
-    assert hass.states.get(NEST).attributes["temperature"] == 25.0
+    assert hass.states.get(THERMOSTAT).attributes["temperature"] == 25.0
     assert hass.states.get("binary_sensor.hearth_radiators_want_heat").state == "on"
 
     # Warm room: boiler off.
@@ -60,7 +60,7 @@ async def test_radiator_room_calls_for_heat(hass: HomeAssistant, house, calls, f
     freezer.tick(timedelta(seconds=35))
     async_fire_time_changed(hass)
     await hass.async_block_till_done()
-    assert hass.states.get(NEST).attributes["temperature"] == 10.0
+    assert hass.states.get(THERMOSTAT).attributes["temperature"] == 10.0
 
 
 async def test_plus_minus_overrides_until_next_change(hass: HomeAssistant, house, calls, freezer) -> None:
@@ -166,99 +166,52 @@ async def test_underfloor_writes_profiles(hass: HomeAssistant, house, calls, fre
     assert calls.of("heatmiserneo", "set_away_mode")[-1] == {"entity_id": "binary_sensor.neohub_away", "away": True}
 
     # Underfloor rooms don't switch the boiler.
-    assert hass.states.get(NEST).attributes["temperature"] == 18.0
+    assert hass.states.get(THERMOSTAT).attributes["temperature"] == 18.0
 
 
 async def test_unload_leaves_boiler_safe(hass: HomeAssistant, house, calls, freezer) -> None:
     freezer.move_to(dt_util.as_utc(dt_util.parse_datetime("2026-11-13T07:30:00+00:00")))
     entry = await _setup(hass, calls, [OFFICE])
     assert await hass.config_entries.async_unload(entry.entry_id)
-    assert hass.states.get(NEST).attributes["temperature"] == 17.0
+    assert hass.states.get(THERMOSTAT).attributes["temperature"] == 17.0
 
 
-async def test_asking_through_fledge(hass: HomeAssistant, house, calls, freezer) -> None:
+async def test_calling_for_heat_with_a_switch(hass: HomeAssistant, house, calls, freezer) -> None:
+    """Any on/off switch: on while a room wants heat, off otherwise, and the
+    thermostat is left alone."""
     freezer.move_to(dt_util.as_utc(dt_util.parse_datetime("2026-11-13T07:30:00+00:00")))
-    hass.states.async_set("switch.nest_call_for_heat", "off", {"rooms": []})
+    relay = "switch.boiler_relay"
+    hass.states.async_set(relay, "off")
+    calls.register("switch", "turn_on", lambda d: hass.states.async_set(relay, "on"))
+    calls.register("switch", "turn_off", lambda d: hass.states.async_set(relay, "off"))
+    entry = await _setup(hass, calls, [OFFICE], boiler_switch=relay)
 
-    def _ask(d):
-        hass.states.async_set("switch.nest_call_for_heat", "on" if d["heat"] else "off", {"rooms": d["rooms"]})
-
-    calls.register("fledge", "call_for_heat", _ask)
-    calls.register("fledge", "set_schedule")
-    await _setup(hass, calls, [OFFICE], boiler_switch="switch.nest_call_for_heat", backup_zone="office")
-
-    assert calls.of("fledge", "call_for_heat")[-1] == {"entity_id": "switch.nest_call_for_heat", "heat": True,
-                                                       "rooms": ["Office"]}
-    assert hass.states.get(NEST).attributes["temperature"] == 18.0, "no temperatures set"
-    backup = calls.of("fledge", "set_schedule")[-1]
-    assert backup["entity_id"] == NEST
-    assert backup["heating"]["mon"][0] == {"time": "07:00", "temp": 19.0}
-    assert backup["heating"]["sat"] == backup["heating"]["sun"]
+    assert calls.of("switch", "turn_on") == [{"entity_id": relay}]
+    assert hass.states.get(relay).state == "on"
+    assert hass.states.get(THERMOSTAT).attributes["temperature"] == 18.0, "no temperatures set"
 
     hass.states.async_set(OFFICE_SENSOR, "19.5")
     await hass.async_block_till_done()
     freezer.tick(timedelta(seconds=35))
     async_fire_time_changed(hass)
     await hass.async_block_till_done()
-    assert calls.of("fledge", "call_for_heat")[-1]["heat"] is False
-    assert len(calls.of("fledge", "set_schedule")) == 1, "written again only when it changes"
+    assert hass.states.get(relay).state == "off"
 
-    # Unavailable (heating control is the Nest's): back to temperatures.
-    hass.states.async_set("switch.nest_call_for_heat", "unavailable")
+    # Unavailable: nothing to do, and still no temperatures.
+    hass.states.async_set(relay, "unavailable")
     hass.states.async_set(OFFICE_SENSOR, "17.0")
     await hass.async_block_till_done()
     freezer.tick(timedelta(seconds=35))
     async_fire_time_changed(hass)
     await hass.async_block_till_done()
-    assert hass.states.get(NEST).attributes["temperature"] == 25.0
+    assert hass.states.get(THERMOSTAT).attributes["temperature"] == 18.0
 
-    # The switch comes back: asking again, and the backup schedule is written
-    # again so the Nest isn't left at 25°.
-    hass.states.async_set("switch.nest_call_for_heat", "off", {"rooms": []})
+    # Back: on again. Unloading turns it off, as nothing else would.
+    hass.states.async_set(relay, "off")
     await hass.async_block_till_done()
     freezer.tick(timedelta(seconds=35))
     async_fire_time_changed(hass)
     await hass.async_block_till_done()
-    assert calls.of("fledge", "call_for_heat")[-1]["heat"] is True
-    assert len(calls.of("fledge", "set_schedule")) == 2
-
-
-async def test_backup_schedule_the_nest_already_holds_is_not_written(hass: HomeAssistant, house, calls, freezer) -> None:
-    """A restart of Hearth mustn't write the Nest's schedule again for nothing:
-    a write is what can disturb the Nest while Hearth is asking for heat."""
-    from homeassistant.helpers import device_registry as dr, entity_registry as er
-    from pytest_homeassistant_custom_component.common import MockConfigEntry
-
-    freezer.move_to(dt_util.as_utc(dt_util.parse_datetime("2026-11-13T07:30:00+00:00")))
-    mqtt = MockConfigEntry(domain="mqtt")
-    mqtt.add_to_hass(hass)
-    device = dr.async_get(hass).async_get_or_create(config_entry_id=mqtt.entry_id, identifiers={("mqtt", "nest")})
-    ent_reg = er.async_get(hass)
-    nest = hass.states.get(NEST)
-    hass.states.async_remove(NEST)  # or the registry would name it climate.nest_thermostat_2
-    ent_reg.async_get_or_create("climate", "mqtt", "nestlocal_s_climate", suggested_object_id="nest_thermostat",
-                                device_id=device.id, config_entry=mqtt)
-    ent_reg.async_get_or_create("sensor", "mqtt", "nestlocal_s_heating_times", suggested_object_id="nest_heating_times",
-                                device_id=device.id, config_entry=mqtt)
-    hass.states.async_set(NEST, nest.state, nest.attributes)
-    assert ent_reg.async_get(NEST) is not None
-    days = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
-    hass.states.async_set("sensor.nest_heating_times", "0", {d: [] for d in days})
-    hass.states.async_set("switch.nest_call_for_heat", "off", {"rooms": []})
-
-    def _ask(d):
-        hass.states.async_set("switch.nest_call_for_heat", "on" if d["heat"] else "off", {"rooms": d["rooms"]})
-
-    calls.register("fledge", "call_for_heat", _ask)
-    calls.register("fledge", "set_schedule")
-    entry = await _setup(hass, calls, [OFFICE], boiler_switch="switch.nest_call_for_heat", backup_zone="office")
-    written = calls.of("fledge", "set_schedule")
-    assert len(written) == 1, "the Nest held something else: written"
-
-    # The Nest now holds it (as Fledge reports it: temps as numbers, any order).
-    hass.states.async_set("sensor.nest_heating_times", "1",
-                          {d: list(reversed(written[0]["heating"][d])) for d in days})
-    assert await hass.config_entries.async_reload(entry.entry_id)
-    await hass.async_block_till_done()
-    assert calls.of("fledge", "call_for_heat")[-1]["heat"] is True, "still asking after the restart"
-    assert len(calls.of("fledge", "set_schedule")) == 1, "not written again"
+    assert hass.states.get(relay).state == "on"
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    assert hass.states.get(relay).state == "off"

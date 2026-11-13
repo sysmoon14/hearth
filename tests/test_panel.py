@@ -5,7 +5,7 @@ from __future__ import annotations
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
-from .conftest import KITCHEN, KITCHEN_ZONE, NEST, OFFICE, OFFICE_TRV, hearth_entry
+from .conftest import KITCHEN, KITCHEN_ZONE, THERMOSTAT, OFFICE, OFFICE_TRV, hearth_entry
 
 
 async def _setup(hass: HomeAssistant, calls, zones, **options):
@@ -32,7 +32,7 @@ async def test_info(hass: HomeAssistant, house, calls, hass_ws_client) -> None:
     assert office["trvs"] == [OFFICE_TRV]
     assert office["schedule"]["weekdays"]
     assert info["rooms"][1]["stat"] == KITCHEN
-    assert info["settings"]["boiler"] == NEST
+    assert info["settings"]["boiler"] == THERMOSTAT
     assert info["house_mode"] == "select.hearth_house_mode"
     assert info["demand"] == "binary_sensor.hearth_radiators_want_heat"
     assert entry.entry_id == info["entry_id"]
@@ -86,7 +86,7 @@ async def test_room_needs_its_devices(hass: HomeAssistant, house, calls, hass_ws
 
 
 async def test_house_settings(hass: HomeAssistant, house, calls, hass_ws_client) -> None:
-    entry = await _setup(hass, calls, [OFFICE, KITCHEN_ZONE], boiler_switch="switch.nest_call_for_heat", backup_zone="office")
+    entry = await _setup(hass, calls, [OFFICE, KITCHEN_ZONE], boiler_switch="switch.boiler_relay")
     ws = await hass_ws_client(hass)
 
     await ws.send_json({"id": 1, "type": "hearth/save_house", "settings": {"away_temp": 15.5, "boost_minutes": 90, "boiler_switch": None}})
@@ -96,18 +96,13 @@ async def test_house_settings(hass: HomeAssistant, house, calls, hass_ws_client)
     assert entry.options["away_temp"] == 15.5
     assert entry.options["boost_minutes"] == 90
     assert "boiler_switch" not in entry.options
-    assert entry.options["backup_zone"] == "office"
     assert entry.options["zones"]
 
-    # An underfloor room can't be the Nest's backup.
-    await ws.send_json({"id": 2, "type": "hearth/save_house", "settings": {"backup_zone": "kitchen"}})
-    assert not (await ws.receive_json())["success"]
     # Out of range.
     await ws.send_json({"id": 3, "type": "hearth/save_house", "settings": {"away_temp": 40}})
     assert not (await ws.receive_json())["success"]
 
-    # Removing the backup room clears it.
+    # Removing a room.
     await ws.send_json({"id": 4, "type": "hearth/remove_room", "room_id": "office"})
     assert (await ws.receive_json())["success"]
     await hass.async_block_till_done()
-    assert "backup_zone" not in entry.options
