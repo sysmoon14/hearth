@@ -217,7 +217,7 @@ class Hearth:
         _LOGGER.debug("Learning from history: rows %s", counts)
         spans = []
         for entity_id in firing:
-            changes = [(s.last_updated, _firing(s)) for s in found.get(entity_id, [])]
+            changes = [(s.last_updated, _firing(entity_id, s)) for s in found.get(entity_id, [])]
             spans += preheat.spans_where(changes, end)
         periods = preheat.firing_periods(spans)
         learned = {}
@@ -359,9 +359,12 @@ class Hearth:
         }
 
 
-def _firing(state: State) -> bool:
-    """A thermostat that's heating, or a call-for-heat switch that's on."""
-    if state.domain == "climate":
+def _firing(entity_id: str, state: State) -> bool:
+    """A thermostat that's heating, or a call-for-heat switch that's on.
+
+    History rows are the recorder's light states: they have the state and
+    attributes, not everything a live State has (no domain, for one)."""
+    if entity_id.startswith("climate."):
         return state.attributes.get("hvac_action") == "heating"
     return state.state == "on"
 

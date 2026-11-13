@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from homeassistant.core import HomeAssistant, State
+from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import async_fire_time_changed
 
@@ -142,9 +143,11 @@ async def test_a_new_room_learns_from_the_boilers_history(hass: HomeAssistant, h
     hass.config.components.add("recorder")
     day = dt_util.parse_datetime("2026-11-12T06:00:00+00:00")
 
-    def state(entity_id: str, value: str, minutes: float, **attrs) -> State:
+    def state(entity_id: str, value: str, minutes: float, **attrs) -> SimpleNamespace:
+        """Shaped like the recorder's light states: no domain, no object_id."""
         when = day + timedelta(minutes=minutes)
-        return State(entity_id, value, attrs, last_changed=when, last_updated=when)
+        return SimpleNamespace(entity_id=entity_id, state=value, attributes=attrs,
+                               last_changed=when, last_updated=when)
 
     history = {
         THERMOSTAT: [state(THERMOSTAT, "heat", 0, hvac_action="idle"), state(THERMOSTAT, "heat", 10, hvac_action="heating"),
