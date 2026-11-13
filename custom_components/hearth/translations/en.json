@@ -108,7 +108,7 @@
   "services": {
     "set_schedule": {
       "name": "Set schedule",
-      "description": "Set a room's weekday and weekend schedule. Each day is a list of changes, up to six, like {\"time\": \"06:30\", \"temp\": 19}.",
+      "description": "Set a room's weekday and weekend schedule. Each day is a list of changes, up to six, each a time and a temperature, like time 06:30, temp 19.",
       "fields": {
         "entity_id": {
           "name": "Room",
