@@ -244,8 +244,24 @@ async def test_underfloor_shows_what_was_asked_while_the_stat_catches_up(hass: H
     await hass.async_block_till_done()
     assert hass.states.get(room).attributes["temperature"] == scheduled + 1
 
-    # Two minutes on, the stat is the truth again.
+    # The stat dropped it: Hearth sends it again, and the stat takes it.
     freezer.tick(timedelta(seconds=130))
     async_fire_time_changed(hass)
     await hass.async_block_till_done()
-    assert hass.states.get(room).attributes["temperature"] == 12.0
+    assert hass.states.get(KITCHEN).attributes["temperature"] == scheduled + 1
+    assert hass.states.get(room).attributes["temperature"] == scheduled + 1
+
+
+async def test_underfloor_taps_reach_the_stat_as_one_write(hass: HomeAssistant, house, calls, freezer) -> None:
+    """A run of + taps answers at once and sends the stat only the last."""
+    freezer.move_to(dt_util.as_utc(dt_util.parse_datetime("2026-11-13T12:00:00+00:00")))
+    await _setup(hass, calls, [KITCHEN_ZONE])
+    room = "climate.kitchen_2"
+    start = hass.states.get(room).attributes["temperature"]
+    before = len(calls.of("climate", "set_temperature"))
+    for n in range(1, 9):
+        await hass.services.async_call("climate", "set_temperature", {"entity_id": room, "temperature": start + n / 2})
+    await hass.async_block_till_done()
+    to_stat = [c for c in calls.of("climate", "set_temperature")[before:] if c["entity_id"] == KITCHEN]
+    assert [c["temperature"] for c in to_stat] == [start + 4]
+    assert hass.states.get(room).attributes["temperature"] == start + 4

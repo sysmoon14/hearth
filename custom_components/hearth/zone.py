@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+import asyncio
 import logging
 import time as monotonic
 from typing import TYPE_CHECKING, Any
@@ -76,6 +77,10 @@ MANUAL_GRACE = 15
 # after Hearth sends something, show what was asked rather than what the stat
 # last reported, and don't take its old setpoint for a change on the stat.
 STAT_SETTLE = 120
+# The neoHub drops commands sent close together, so a stat's setpoint goes
+# one write at a time, only the latest, and again if the stat hasn't taken it.
+STAT_RECHECK = 45
+STAT_TRIES = 3
 
 
 def _float(value: Any) -> float | None:
@@ -497,6 +502,10 @@ class UnderfloorZone(Zone):
         self.profile: str = config.get(CONF_PROFILE) or f"Hearth {self.name}"
         self._held_for_away = False
         self._settle_until = 0.0
+        self._want: float | None = None  # the setpoint the stat should take
+        self._writing: asyncio.Task | None = None
+        self._written_at = 0.0
+        self._tries = 0
 
     def _sent(self) -> None:
         self._settle_until = monotonic.monotonic() + STAT_SETTLE
@@ -623,8 +632,43 @@ class UnderfloorZone(Zone):
         """The stat's own setpoint lasts until its next level: exactly an
         'until the next change' override."""
         self._sent()
-        await self._call("climate", "set_temperature", {"entity_id": self.stat, ATTR_TEMPERATURE: temp})
+        self._want, self._tries = temp, 0
+        self._write_setpoint()
         await self._changed(sync=False)
+
+    def _write_setpoint(self) -> None:
+        """Start writing the wanted setpoint unless a write is under way
+        (which picks up the latest when it's done)."""
+        if self._writing is None or self._writing.done():
+            self._writing = self.hass.async_create_task(self._writer(), f"hearth {self.id} setpoint")
+
+    async def _writer(self) -> None:
+        for _ in range(3):
+            await asyncio.sleep(0)  # let taps already on their way land first
+        sent = None
+        while self._want is not None and self._want != sent:
+            sent = self._want
+            await self._call("climate", "set_temperature", {"entity_id": self.stat, ATTR_TEMPERATURE: sent})
+            self._written_at = monotonic.monotonic()
+
+    async def async_tick(self, now: datetime) -> None:
+        await super().async_tick(now)
+        if self._want is None:
+            return
+        state = self._stat_state
+        stat_target = _float(state.attributes.get(ATTR_TEMPERATURE)) if state else None
+        if self.state.override_until is None or self.state.mode != MODE_SCHEDULE or stat_target == self._want:
+            self._want = None
+            return
+        if (self._writing and not self._writing.done()) or monotonic.monotonic() - self._written_at < STAT_RECHECK:
+            return
+        if self._tries >= STAT_TRIES:
+            _LOGGER.warning("%s: the stat didn't take %s°", self.name, self._want)
+            self._want = None
+            return
+        self._tries += 1
+        self._sent()
+        self._write_setpoint()
 
     async def _hold(self, temp: float, minutes: int) -> None:
         hours, mins = divmod(minutes, 60)
