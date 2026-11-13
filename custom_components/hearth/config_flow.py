@@ -188,7 +188,12 @@ class HearthOptionsFlow(OptionsFlow):
     # --- the house ------------------------------------------------------------
     async def async_step_settings(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         if user_input is not None:
-            return self._save(**user_input)
+            # A cleared optional field is left out of user_input, so drop the
+            # old value too: otherwise a boiler, switch or backup room can
+            # never be unset.
+            kept = {k: v for k, v in self.config_entry.options.items()
+                    if k not in (CONF_BOILER, CONF_BOILER_SWITCH, CONF_BACKUP_ZONE)}
+            return self.async_create_entry(data={**kept, **user_input})
         o = self._options
         schema = vol.Schema(
             {

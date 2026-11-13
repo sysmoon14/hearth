@@ -211,3 +211,13 @@ async def test_asking_through_fledge(hass: HomeAssistant, house, calls, freezer)
     async_fire_time_changed(hass)
     await hass.async_block_till_done()
     assert hass.states.get(NEST).attributes["temperature"] == 25.0
+
+    # The switch comes back: asking again, and the backup schedule is written
+    # again so the Nest isn't left at 25°.
+    hass.states.async_set("switch.nest_call_for_heat", "off", {"rooms": []})
+    await hass.async_block_till_done()
+    freezer.tick(timedelta(seconds=35))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert calls.of("fledge", "call_for_heat")[-1]["heat"] is True
+    assert len(calls.of("fledge", "set_schedule")) == 2

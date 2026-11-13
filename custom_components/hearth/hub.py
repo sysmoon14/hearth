@@ -217,7 +217,14 @@ class Hearth:
             self.demand = True
         elif not raw and self.demand and held >= float(self.settings[CONF_OFF_DELAY]):
             self.demand = False
-        if self._asking_through_switch():
+        through_switch = self._asking_through_switch()
+        if through_switch and self._boiler_sent is not None:
+            # Back from setting temperatures while the switch was away: write
+            # the backup schedule again, which also puts the Nest's own
+            # setpoint back from the 25°/10° it was left at.
+            self._boiler_sent = None
+            self._backup_written = None
+        if through_switch:
             await self._ask_switch(self.demand, tuple(self.zones_calling()) if self.demand else ())
         else:
             temp = float(self.settings[CONF_BOILER_ON] if self.demand else self.settings[CONF_BOILER_OFF])
