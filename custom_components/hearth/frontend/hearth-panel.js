@@ -4,7 +4,7 @@
 // commands (panel.py); schedules, modes, boosts and Home/Away/Holiday through
 // Hearth's own actions and entities, the same ones the cards use.
 
-const VERSION = "0.3.1";
+const VERSION = "0.3.2";
 const MAX_CHANGES = 6;
 const DAYS = [["weekdays", "Weekdays · Mon–Fri"], ["weekends", "Weekends · Sat–Sun"]];
 const HOUSE = [["home", "Home"], ["away", "Away"], ["holiday", "Holiday"]];
@@ -39,6 +39,17 @@ class HearthPanel extends HTMLElement {
     this._sig = "";
     this._pickers = !!customElements.get("ha-entity-picker");
     const root = this.shadowRoot;
+    this._steps = {}; // − / + taps not yet sent, by room id
+    this._pressing = false;
+    // Rebuilding the page under a finger or mouse loses the tap, so hold
+    // updates until it lifts (the click comes just after).
+    root.addEventListener("pointerdown", () => { this._pressing = true; });
+    const lifted = () => setTimeout(() => {
+      this._pressing = false;
+      if (this._pending && !this._typing() && !this._dialog) this._render();
+    }, 50);
+    window.addEventListener("pointerup", lifted);
+    window.addEventListener("pointercancel", lifted);
     root.addEventListener("click", (e) => this._click(e));
     root.addEventListener("change", (e) => this._change(e));
     root.addEventListener("input", (e) => this._input(e));
@@ -59,7 +70,7 @@ class HearthPanel extends HTMLElement {
     const sig = this._watched().map((id) => hass.states[id]?.last_updated).join("|");
     if (sig === this._sig) return;
     this._sig = sig;
-    if (this._typing() || this._dialog) { this._pending = true; return; }
+    if (this._typing() || this._dialog || this._pressing) { this._pending = true; return; }
     this._render();
   }
 
@@ -358,7 +369,7 @@ class HearthPanel extends HTMLElement {
           <div class="controls">
             <div class="row" style="gap:18px">
               <button class="round" data-act="step" data-id="${esc(room.id)}" data-step="-0.5" aria-label="Cooler">−</button>
-              <div class="target"><div class="tbig">${deg(a.temperature)}</div><div class="muted small">${esc(until.trim())}</div></div>
+              <div class="target"><div class="tbig">${deg(this._steps[room.id]?.temp ?? a.temperature)}</div><div class="muted small">${esc(until.trim())}</div></div>
               <button class="round" data-act="step" data-id="${esc(room.id)}" data-step="0.5" aria-label="Warmer">+</button>
             </div>
             <div class="seg" role="group" aria-label="Mode">${MODES.map(([k, label]) =>
@@ -710,6 +721,23 @@ class HearthPanel extends HTMLElement {
       </div></section></div>`;
   }
 
+  // Show each − / + at once, and send once the taps stop.
+  _step(room, delta) {
+    const held = this._steps[room.id];
+    const from = held?.temp ?? num(this._attr(room.entity_id, "temperature")) ?? 19;
+    const temp = clamp(from + delta);
+    clearTimeout(held?.timer);
+    const step = { temp };
+    this._steps[room.id] = step;
+    this._render();
+    step.timer = setTimeout(async () => {
+      await this._call("climate", "set_temperature", { entity_id: room.entity_id, temperature: temp });
+      setTimeout(() => {
+        if (this._steps[room.id] === step) { delete this._steps[room.id]; this._render(); }
+      }, 1500);
+    }, 600);
+  }
+
   // Events ----------------------------------------------------------------------------
   _click(e) {
     const el = e.target.closest("[data-act]");
@@ -724,11 +752,7 @@ class HearthPanel extends HTMLElement {
       case "room": this._room = id; this._render(); return;
       case "house": this._call("select", "select_option", { entity_id: this._info.house_mode, option: el.dataset.mode }); return;
       case "mode": this._call("climate", "set_hvac_mode", { entity_id: room.entity_id, hvac_mode: el.dataset.mode }); return;
-      case "step": {
-        const t = num(this._attr(room.entity_id, "temperature")) ?? 19;
-        this._call("climate", "set_temperature", { entity_id: room.entity_id, temperature: clamp(t + Number(el.dataset.step)) });
-        return;
-      }
+      case "step": this._step(room, Number(el.dataset.step)); return;
       case "boost": {
         const boosting = this._attr(room.entity_id, "preset_mode") === "boost";
         this._call("hearth", boosting ? "cancel_boost" : "boost", { entity_id: room.entity_id });

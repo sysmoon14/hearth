@@ -72,6 +72,10 @@ BAD_STATES = (STATE_UNAVAILABLE, STATE_UNKNOWN, None, "")
 # A valve reporting a target we didn't send this long after our last
 # command was turned by hand.
 MANUAL_GRACE = 15
+# The neoHub reports a stat's setpoint every half minute or so: for this long
+# after Hearth sends something, show what was asked rather than what the stat
+# last reported, and don't take its old setpoint for a change on the stat.
+STAT_SETTLE = 120
 
 
 def _float(value: Any) -> float | None:
@@ -492,6 +496,14 @@ class UnderfloorZone(Zone):
         self.stat: str = config[CONF_STAT]
         self.profile: str = config.get(CONF_PROFILE) or f"Hearth {self.name}"
         self._held_for_away = False
+        self._settle_until = 0.0
+
+    def _sent(self) -> None:
+        self._settle_until = monotonic.monotonic() + STAT_SETTLE
+
+    @property
+    def _settling(self) -> bool:
+        return monotonic.monotonic() < self._settle_until
 
     def watched_entities(self) -> list[str]:
         return [self.stat, *super().watched_entities()]
@@ -508,7 +520,10 @@ class UnderfloorZone(Zone):
         return _float(state.attributes.get("current_temperature")) if state else None
 
     def target(self) -> float | None:
-        """The stat's own target is the truth: it runs the schedule."""
+        """The stat's own target is the truth: it runs the schedule (once it
+        has caught up with what Hearth last sent)."""
+        if self._settling:
+            return super().target()
         state = self._stat_state
         stat = _float(state.attributes.get(ATTR_TEMPERATURE)) if state else None
         return stat if stat is not None else super().target()
@@ -573,6 +588,7 @@ class UnderfloorZone(Zone):
         """Write the profile for the current mode and make the stat run it.
 
         Off is the stat's own standby, which keeps frost protection."""
+        self._sent()
         if self.state.mode == MODE_OFF:
             if not self.in_standby:
                 await self._call("climate", "set_preset_mode", {"entity_id": self.stat, "preset_mode": "standby"})
@@ -606,6 +622,7 @@ class UnderfloorZone(Zone):
     async def _override(self, temp: float) -> None:
         """The stat's own setpoint lasts until its next level: exactly an
         'until the next change' override."""
+        self._sent()
         await self._call("climate", "set_temperature", {"entity_id": self.stat, ATTR_TEMPERATURE: temp})
         await self._changed(sync=False)
 
@@ -669,6 +686,7 @@ class UnderfloorZone(Zone):
             and self.hub.house_mode not in (HOUSE_AWAY, HOUSE_HOLIDAY)
             and not self.boost_active(now)
             and self.state.override_until is None
+            and not self._settling
             and stat_target is not None
             and stat_target != temp
         ):

@@ -215,3 +215,37 @@ async def test_calling_for_heat_with_a_switch(hass: HomeAssistant, house, calls,
     assert hass.states.get(relay).state == "on"
     assert await hass.config_entries.async_unload(entry.entry_id)
     assert hass.states.get(relay).state == "off"
+
+
+async def test_underfloor_shows_what_was_asked_while_the_stat_catches_up(hass: HomeAssistant, house, calls, freezer) -> None:
+    """The neoHub reports a stat's setpoint late: leaving Off isn't taken for
+    a change on the stat, and + shows at once, until the stat catches up."""
+    freezer.move_to(dt_util.as_utc(dt_util.parse_datetime("2026-11-13T12:00:00+00:00")))
+    await _setup(hass, calls, [KITCHEN_ZONE])
+    room = "climate.kitchen_2"
+    await hass.services.async_call("climate", "set_hvac_mode", {"entity_id": room, "hvac_mode": "off"}, blocking=True)
+
+    def lagging():
+        stat = hass.states.get(KITCHEN)
+        hass.states.async_set(KITCHEN, stat.state, {**stat.attributes, "temperature": 12.0})
+
+    # Back to Schedule: the stat still reports its frost level.
+    await hass.services.async_call("climate", "set_hvac_mode", {"entity_id": room, "hvac_mode": "auto"}, blocking=True)
+    lagging()
+    await hass.async_block_till_done()
+    state = hass.states.get(room)
+    assert not state.attributes["reason"].startswith("Changed on the thermostat"), state.attributes["reason"]
+    scheduled = state.attributes["temperature"]
+    assert scheduled != 12.0
+
+    # + : shown straight away though the stat hasn't reported it yet.
+    await hass.services.async_call("climate", "set_temperature", {"entity_id": room, "temperature": scheduled + 1}, blocking=True)
+    lagging()
+    await hass.async_block_till_done()
+    assert hass.states.get(room).attributes["temperature"] == scheduled + 1
+
+    # Two minutes on, the stat is the truth again.
+    freezer.tick(timedelta(seconds=130))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert hass.states.get(room).attributes["temperature"] == 12.0
