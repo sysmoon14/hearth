@@ -13,7 +13,9 @@ from homeassistant.util import slugify
 
 from .const import (
     CONF_AWAY_TEMP,
+    CONF_BACKUP_ZONE,
     CONF_BOILER,
+    CONF_BOILER_SWITCH,
     CONF_BOILER_OFF,
     CONF_BOILER_ON,
     CONF_BOOST_MINUTES,
@@ -191,6 +193,13 @@ class HearthOptionsFlow(OptionsFlow):
         schema = vol.Schema(
             {
                 vol.Optional(CONF_BOILER, description={"suggested_value": o.get(CONF_BOILER)}): CLIMATE,
+                vol.Optional(CONF_BOILER_SWITCH, description={"suggested_value": o.get(CONF_BOILER_SWITCH)}):
+                    selector.EntitySelector(selector.EntitySelectorConfig(domain="switch", integration="fledge")),
+                vol.Optional(CONF_BACKUP_ZONE, description={"suggested_value": o.get(CONF_BACKUP_ZONE)}):
+                    selector.SelectSelector(selector.SelectSelectorConfig(options=[
+                        selector.SelectOptionDict(value=z[CONF_ZONE_ID], label=z[CONF_NAME])
+                        for z in self._zones if z.get(CONF_KIND) == KIND_RADIATOR
+                    ])),
                 vol.Required(CONF_BOILER_ON, default=o[CONF_BOILER_ON]): _temp(15, 32),
                 vol.Required(CONF_BOILER_OFF, default=o[CONF_BOILER_OFF]): _temp(5, 18),
                 vol.Required(CONF_FALLBACK, default=o[CONF_FALLBACK]): _temp(5, 22),

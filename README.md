@@ -31,6 +31,7 @@ The house has one more control, **Home / Away / Holiday**:
 - It feeds the valve the room's real temperature from a sensor elsewhere in the room, because a valve's own sensor sits on a hot radiator.
 - It switches the boiler: when any radiator room wants heat, the boiler thermostat (a Nest, for example) is set to 25°; when none does, it's set to 10°. Short delays stop it switching on and off as valves settle.
 - If Hearth stops, the boiler thermostat is left at 17° so the house can't go cold.
+- **With a Fledge Nest**, choose its **Call for heat** switch in House settings instead: Hearth asks through it rather than setting temperatures, the Nest's screen says which rooms are asking, and if Hearth stops the Nest goes back to its own schedule by itself. Pick a **backup room** and Hearth keeps the Nest's own schedule as that room's, so the fallback is sensible.
 
 **Underfloor rooms (Heatmiser neoStats, through the [heatmiserneo](https://github.com/MindrustUK/Heatmiser-for-home-assistant) integration).** The stat runs the schedule itself.
 - Hearth writes the schedule to the neoHub as a 5/2-day profile (`Hearth Kitchen`, `Hearth Kitchen Fixed`, `Hearth Kitchen Off`) and makes the stat run it.

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 DOMAIN = "hearth"
-VERSION = "0.1.1"
+VERSION = "0.1.2"
 
 # Zone kinds
 KIND_RADIATOR = "radiator"
@@ -43,6 +43,13 @@ CONF_STAT = "stat"
 CONF_PROFILE = "profile"
 
 CONF_BOILER = "boiler"
+# A Fledge Nest's "Call for heat" switch: when set, Hearth asks through it
+# instead of setting the boiler thermostat's temperature, and the Nest falls
+# back to its own schedule by itself if Hearth stops (Fledge's heating control).
+CONF_BOILER_SWITCH = "boiler_switch"
+# The room whose schedule the boiler thermostat keeps as its own, for when
+# Hearth isn't there (written with fledge.set_schedule).
+CONF_BACKUP_ZONE = "backup_zone"
 CONF_BOILER_ON = "boiler_on_temp"
 CONF_BOILER_OFF = "boiler_off_temp"
 CONF_FALLBACK = "fallback_temp"

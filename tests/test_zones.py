@@ -174,3 +174,40 @@ async def test_unload_leaves_boiler_safe(hass: HomeAssistant, house, calls, free
     entry = await _setup(hass, calls, [OFFICE])
     assert await hass.config_entries.async_unload(entry.entry_id)
     assert hass.states.get(NEST).attributes["temperature"] == 17.0
+
+
+async def test_asking_through_fledge(hass: HomeAssistant, house, calls, freezer) -> None:
+    freezer.move_to(dt_util.as_utc(dt_util.parse_datetime("2026-11-13T07:30:00+00:00")))
+    hass.states.async_set("switch.nest_call_for_heat", "off", {"rooms": []})
+
+    def _ask(d):
+        hass.states.async_set("switch.nest_call_for_heat", "on" if d["heat"] else "off", {"rooms": d["rooms"]})
+
+    calls.register("fledge", "call_for_heat", _ask)
+    calls.register("fledge", "set_schedule")
+    await _setup(hass, calls, [OFFICE], boiler_switch="switch.nest_call_for_heat", backup_zone="office")
+
+    assert calls.of("fledge", "call_for_heat")[-1] == {"entity_id": "switch.nest_call_for_heat", "heat": True,
+                                                       "rooms": ["Office"]}
+    assert hass.states.get(NEST).attributes["temperature"] == 18.0, "no temperatures set"
+    backup = calls.of("fledge", "set_schedule")[-1]
+    assert backup["entity_id"] == NEST
+    assert backup["heating"]["mon"][0] == {"time": "07:00", "temp": 19.0}
+    assert backup["heating"]["sat"] == backup["heating"]["sun"]
+
+    hass.states.async_set(OFFICE_SENSOR, "19.5")
+    await hass.async_block_till_done()
+    freezer.tick(timedelta(seconds=35))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert calls.of("fledge", "call_for_heat")[-1]["heat"] is False
+    assert len(calls.of("fledge", "set_schedule")) == 1, "written again only when it changes"
+
+    # Unavailable (heating control is the Nest's): back to temperatures.
+    hass.states.async_set("switch.nest_call_for_heat", "unavailable")
+    hass.states.async_set(OFFICE_SENSOR, "17.0")
+    await hass.async_block_till_done()
+    freezer.tick(timedelta(seconds=35))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert hass.states.get(NEST).attributes["temperature"] == 25.0
