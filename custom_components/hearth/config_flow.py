@@ -26,6 +26,7 @@ from .const import (
     CONF_OFF_DELAY,
     CONF_OFF_TEMP,
     CONF_ON_DELAY,
+    CONF_PREHEAT_MAX,
     CONF_PROFILE,
     CONF_SENSOR,
     CONF_STAT,
@@ -206,6 +207,10 @@ class HearthOptionsFlow(OptionsFlow):
                 vol.Required(CONF_BOOST_TEMP, default=o[CONF_BOOST_TEMP]): _temp(15, 28),
                 vol.Required(CONF_BOOST_MINUTES, default=o[CONF_BOOST_MINUTES]): selector.NumberSelector(
                     selector.NumberSelectorConfig(min=15, max=240, step=15, unit_of_measurement="min",
+                                                  mode=selector.NumberSelectorMode.BOX)
+                ),
+                vol.Required(CONF_PREHEAT_MAX, default=o[CONF_PREHEAT_MAX]): selector.NumberSelector(
+                    selector.NumberSelectorConfig(min=0, max=360, step=15, unit_of_measurement="min",
                                                   mode=selector.NumberSelectorMode.BOX)
                 ),
                 vol.Required(CONF_AWAY_TEMP, default=o[CONF_AWAY_TEMP]): _temp(5, 22),

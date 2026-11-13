@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from datetime import datetime, timedelta
+from functools import partial
 import logging
 import time as monotonic
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_TEMPERATURE
-from homeassistant.core import Context, Event, EventStateChangedData, HomeAssistant, callback
+from homeassistant.core import Context, Event, EventStateChangedData, HomeAssistant, State, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import (
     async_call_later,
@@ -37,9 +39,11 @@ from .const import (
     HOUSE_HOME,
     HOUSE_MODES,
     KIND_RADIATOR,
+    SEED_DAYS,
     STORAGE_KEY,
     STORAGE_VERSION,
 )
+from . import preheat
 from .zone import RadiatorZone, UnderfloorZone, Zone, ZoneState, make_zone
 
 _LOGGER = logging.getLogger(__name__)
@@ -68,6 +72,7 @@ class Hearth:
         self._boiler_sent: tuple[float, float] | None = None
         self._switch_sent: tuple[bool, float] | None = None
         self.last_boiler_command: str | None = None
+        self._seeding: asyncio.Task | None = None
 
     @property
     def boiler(self) -> str | None:
@@ -107,6 +112,8 @@ class Hearth:
         self._unsubs.append(async_track_time_interval(self.hass, self._tick, TICK))
         self.async_save()
         await self.async_evaluate()
+        if any(z.sensor and not z.state.seeded for z in self.radiator_zones):
+            self._seeding = self.hass.async_create_background_task(self._async_seed(), "hearth: learn warm-ups")
 
     async def async_stop(self) -> None:
         """Leave the boiler safe: the switch off, or the thermostat at a safe level."""
@@ -115,6 +122,8 @@ class Hearth:
         self._unsubs.clear()
         if self._eval_pending:
             self._eval_pending()
+        if self._seeding and not self._seeding.done():
+            self._seeding.cancel()
         if not self.radiator_zones:
             return
         if self.boiler_switch:
@@ -159,6 +168,43 @@ class Hearth:
         for zone in self.zones.values():
             await zone.async_tick(dt_util.utcnow())
         await self.async_evaluate()
+
+    # --- learning from history ----------------------------------------------------
+    async def _async_seed(self) -> None:
+        """Read each new room's warm-ups from the recorder: every time the
+        boiler fired, how far and how fast the room's sensor rose."""
+        rooms = [z for z in self.radiator_zones if z.sensor and not z.state.seeded]
+        firing = [e for e in (self.boiler, self.boiler_switch) if e]
+        if not rooms or not firing or "recorder" not in self.hass.config.components:
+            return
+        from homeassistant.components.recorder import get_instance, history  # noqa: PLC0415
+
+        end = dt_util.utcnow()
+        start = end - timedelta(days=SEED_DAYS)
+        ids = list(dict.fromkeys([*firing, *(z.sensor for z in rooms)]))
+        try:
+            found: dict[str, list[State]] = await get_instance(self.hass).async_add_executor_job(
+                partial(
+                    history.get_significant_states, self.hass, start, end, ids,
+                    significant_changes_only=False, minimal_response=False, no_attributes=False,
+                )
+            )
+        except Exception as err:  # noqa: BLE001 - learning live still works
+            _LOGGER.warning("Couldn't read the history to learn how fast rooms warm: %s", err)
+            return
+        spans = []
+        for entity_id in firing:
+            changes = [(s.last_updated, _firing(s)) for s in found.get(entity_id, [])]
+            spans += preheat.spans_where(changes, end)
+        periods = preheat.firing_periods(spans)
+        for zone in rooms:
+            if not zone.sensor or zone.state.seeded or zone.id not in self.zones:
+                continue
+            readings = [(s.last_updated, v) for s in found.get(zone.sensor, []) if (v := _number(s.state)) is not None]
+            warmups = preheat.warmups_from_history(periods, readings)
+            zone.seed(warmups)
+            _LOGGER.info("%s: learned %d warm-ups from %d times the boiler fired", zone.name, len(warmups), len(periods))
+        async_dispatcher_send(self.hass, SIGNAL_UPDATE)
 
     # --- the house -------------------------------------------------------------
     async def async_set_house_mode(self, mode: str) -> None:
@@ -281,6 +327,20 @@ class Hearth:
                 for zid, z in self.zones.items()
             },
         }
+
+
+def _firing(state: State) -> bool:
+    """A thermostat that's heating, or a call-for-heat switch that's on."""
+    if state.domain == "climate":
+        return state.attributes.get("hvac_action") == "heating"
+    return state.state == "on"
+
+
+def _number(value: str) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 __all__ = ["Hearth", "SIGNAL_UPDATE", "KIND_RADIATOR", "HOUSE_AWAY"]

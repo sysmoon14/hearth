@@ -67,6 +67,7 @@
           "demand_off_delay": "Wait before switching it off",
           "boost_temp": "Boost temperature",
           "boost_minutes": "Boost length",
+          "preheat_max_minutes": "Radiator rooms warm up early by up to (0 turns it off)",
           "away_temp": "Away: rooms held no warmer than",
           "holiday_temp": "Holiday: rooms kept above",
           "off_temp": "A room that's off is kept above",

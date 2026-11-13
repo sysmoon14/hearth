@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 DOMAIN = "hearth"
-VERSION = "0.3.4"
+VERSION = "0.4.0"
 
 # Zone kinds
 KIND_RADIATOR = "radiator"
@@ -56,6 +56,9 @@ CONF_HOLIDAY_TEMP = "holiday_temp"
 CONF_OFF_TEMP = "off_temp"
 CONF_ON_DELAY = "demand_on_delay"
 CONF_OFF_DELAY = "demand_off_delay"
+# How early a radiator room may start warming for a warmer schedule change.
+# 0 turns warming up early off.
+CONF_PREHEAT_MAX = "preheat_max_minutes"
 
 DEFAULTS = {
     CONF_BOILER_ON: 25.0,
@@ -68,6 +71,7 @@ DEFAULTS = {
     CONF_OFF_TEMP: 7.0,
     CONF_ON_DELAY: 60,
     CONF_OFF_DELAY: 180,
+    CONF_PREHEAT_MAX: 180,
 }
 
 # Hysteresis for a radiator room asking for heat.
@@ -77,6 +81,9 @@ DEMAND_ABOVE = 0.2
 # How often an outside temperature is re-sent to a valve even if unchanged,
 # so the valve never falls back to its own sensor.
 EXTERNAL_REFRESH_SECONDS = 20 * 60
+
+# How far back the recorder is read for warm-ups when a room first learns.
+SEED_DAYS = 10
 
 STORAGE_KEY = "hearth"
 STORAGE_VERSION = 1

@@ -9,7 +9,7 @@
  *   show_house: false                        # hide the Home/Away/Holiday row
  */
 
-const VERSION = "0.3.4";
+const VERSION = "0.4.0";
 const MAX_CHANGES = 6;
 const MODES = [
   ["auto", "Schedule"],
@@ -281,7 +281,7 @@ class HearthCard extends HTMLElement {
     const s = this._hass.states[id];
     if (!s) return `<div class="room"><div class="row"><div class="why">${esc(id)} isn't available</div></div></div>`;
     const a = s.attributes;
-    const heating = a.hvac_action === "heating";
+    const heating = a.hvac_action === "heating" || a.hvac_action === "preheating";
     const pending = this._pending[id]?.temp;
     const target = pending ?? a.temperature;
     const open = this._open.has(id);

@@ -4,7 +4,7 @@
 // commands (panel.py); schedules, modes, boosts and Home/Away/Holiday through
 // Hearth's own actions and entities, the same ones the cards use.
 
-const VERSION = "0.3.4";
+const VERSION = "0.4.0";
 const MAX_CHANGES = 6;
 const DAYS = [["weekdays", "Weekdays · Mon–Fri"], ["weekends", "Weekends · Sat–Sun"]];
 const HOUSE = [["home", "Home"], ["away", "Away"], ["holiday", "Holiday"]];
@@ -193,7 +193,7 @@ class HearthPanel extends HTMLElement {
 
   _heating(room) {
     const st = this._state(room.entity_id);
-    return st?.attributes?.hvac_action === "heating" || st?.attributes?.calling_for_heat;
+    return ["heating", "preheating"].includes(st?.attributes?.hvac_action) || st?.attributes?.calling_for_heat;
   }
 
   // --- rendering ------------------------------------------------------------
@@ -380,10 +380,7 @@ class HearthPanel extends HTMLElement {
           <div class="row between"><h2>Today</h2><span class="muted small">Line: room · dashes: target · orange: heating</span></div>
           <div class="chart" data-chart="${esc(room.id)}"><div class="muted small">Loading today's readings…</div></div>
         </section>
-        <section class="card stack dashed">
-          <div class="row between"><h2>Pre-heat</h2><span class="chip grey">Later</span></div>
-          <span class="muted">Once Hearth learns how fast ${esc(room.name)} warms, this shows its time to temperature and starts early so each change is reached on time, not started then.</span>
-        </section>
+        ${this._preheatCard(room, a)}
       </div>
       <aside class="card side">
         <h2>${esc(room.name)}</h2>
@@ -399,6 +396,36 @@ class HearthPanel extends HTMLElement {
         </div>
         <span class="muted small" style="padding-top:12px">${esc(room.entity_id || "")} · in Home Assistant its modes are Auto (Schedule), Heat (Fixed) and Off.</span>
       </aside></div>`;
+  }
+
+  _preheatCard(room, a) {
+    const hhmm = (iso) => new Date(iso).toTimeString().slice(0, 5);
+    const card = (chip, chipClass, body) => `<section class="card stack">
+      <div class="row between"><h2>Warming up early</h2><span class="chip ${chipClass}">${chip}</span></div>${body}</section>`;
+    if (room.kind !== "radiator") {
+      return card("The stat's own", "grey", `<span class="muted">The Heatmiser stat warms the floor early (its optimum start) so each level is reached on time. When it does, ${esc(room.name)} says “Warming up early”.</span>`);
+    }
+    if (!room.sensor) {
+      return card("Needs a sensor", "grey", `<span class="muted">The valve's own reading warms with the radiator, not the room, so Hearth can't tell how fast ${esc(room.name)} warms. Add a room sensor and it will start learning.</span>`);
+    }
+    const max = Number(this._info.settings.preheat_max_minutes);
+    const n = a.warm_ups || 0;
+    const hist = a.warm_ups_from_history || 0;
+    const learned = `${n} warm-up${n === 1 ? "" : "s"}${hist ? ` (${hist} from history)` : ""}`;
+    if (a.warm_up_rate == null) {
+      return card("Learning", "grey", `<span class="muted">Hearth times each warm-up, from asking for heat to reaching the target. It has seen ${learned} so far, and starts early once it has seen 2.</span>`);
+    }
+    const rate = Number(a.warm_up_rate);
+    const perDeg = Math.round(60 / rate);
+    let now = "";
+    if (!max) now = "Off for every room: set “Warm up early by up to” on the House tab.";
+    else if (a.preheating) now = `Warming up now, to reach ${deg(a.temperature)} by ${a.next_change_at ? hhmm(a.next_change_at) : "the next change"}.`;
+    else if (a.preheat_from && a.next_change_at) now = `Next: starts about ${hhmm(a.preheat_from)} to reach ${deg(a.next_change_temp)} by ${hhmm(a.next_change_at)}.`;
+    else now = "Nothing to warm up for next: the next change isn't warmer.";
+    return card(a.preheating ? "Warming up" : max ? "On" : "Off", a.preheating ? "heat" : max ? "ok" : "grey", `
+      <div class="kv"><span>Warms about<span class="sub">Learned from ${learned}</span></span><span>${rate.toFixed(1)}° an hour</span></div>
+      <div class="kv"><span>A degree takes<span class="sub">Including the boiler and radiators getting hot</span></span><span>${perDeg} min</span></div>
+      <span class="muted">${esc(now)}</span>`);
   }
 
   async _drawHistory(room) {
@@ -425,7 +452,7 @@ class HearthPanel extends HTMLElement {
   _chart(rows, dayStart) {
     // Attributes carry forward between rows (each row lists only what changed).
     let cur = {};
-    const pts = rows.map((r) => { cur = { ...cur, ...r.a }; return { t: r.t, room: num(cur.current_temperature), target: num(cur.temperature), heat: cur.hvac_action === "heating" }; })
+    const pts = rows.map((r) => { cur = { ...cur, ...r.a }; return { t: r.t, room: num(cur.current_temperature), target: num(cur.temperature), heat: ["heating", "preheating"].includes(cur.hvac_action) }; })
       .filter((p) => p.t >= dayStart);
     if (!pts.length) return `<div class="muted small">No readings yet today.</div>`;
     const now = Date.now();
@@ -577,6 +604,7 @@ class HearthPanel extends HTMLElement {
           ${tempRow("boost_temp", "Boost to", "", 15, 28)}
           ${secRow("boost_minutes", "Boost for", "", 15, 240, "min", 1)}
           ${tempRow("off_temp", "A radiator room that's off", "Kept above", 5, 15)}
+          ${secRow("preheat_max_minutes", "Warm up early by up to", "Radiator rooms start early to reach a warmer change on time · 0 turns it off", 0, 360, "min", 1)}
         </section>
         <section class="card stack tight">
           <button class="btn solid wide" data-act="house-save" ${dirty && !this._busy ? "" : "disabled"}>${this._busy ? "Saving…" : "Save house settings"}</button>

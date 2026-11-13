@@ -90,6 +90,8 @@ class _HearthClimate(HearthEntity, ClimateEntity):
     @property
     def hvac_action(self) -> HVACAction:
         if self.zone.calling:
+            if self.zone.preheating(dt_util.utcnow()):
+                return HVACAction.PREHEATING
             return HVACAction.HEATING
         if self.zone.state.mode == MODE_OFF:
             return HVACAction.OFF

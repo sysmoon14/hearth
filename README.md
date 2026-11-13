@@ -30,6 +30,7 @@ The house has one more control, **Home / Away / Holiday**:
 - Hearth sets each valve's target and puts the valve in plain heat mode, so the valve's own weekly schedule never runs.
 - It feeds the valve the room's real temperature from a sensor elsewhere in the room, because a valve's own sensor sits on a hot radiator.
 - It calls for heat. With a **Call for heat switch** (any on/off `switch` or `input_boolean`: a boiler relay, or a thermostat's own call-for-heat switch), the switch is on while any radiator room wants heat and off otherwise; if Hearth stops, it's turned off. Without one, the boiler thermostat is set to 25° when heat is wanted and 10° when it isn't, and left at 17° if Hearth stops so the house can't go cold. Short delays stop it switching on and off as valves settle.
+- It warms up early. A room with its own sensor learns how fast it warms, then starts early so a warmer schedule change is reached on time, not started then: "Warming up early for 21° by 07:00". It learns from each warm-up it sees and, the first time, from the recorder's history of when the boiler fired. Set how early it may start (up to 3 hours by default, 0 turns it off) in House settings. A room using its valve's own sensor can't learn: that sensor warms with the radiator, not the room.
 - `binary_sensor.hearth_radiators_want_heat` carries the same on/off, with the rooms asking in `rooms_asking`, for anything else that wants to follow it.
 
 **Underfloor rooms (Heatmiser neoStats, through the [heatmiserneo](https://github.com/MindrustUK/Heatmiser-for-home-assistant) integration).** The stat runs the schedule itself.
@@ -75,7 +76,7 @@ title: Upstairs
 
 | Entity | What it is |
 |-|-|
-| `climate.<room>` | One per room. Attributes include `reason`, `schedule`, `next_change_at`, `next_change_temp`, `calling_for_heat`, `kind` and `devices`. |
+| `climate.<room>` | One per room. Attributes include `reason`, `schedule`, `next_change_at`, `next_change_temp`, `calling_for_heat`, `kind` and `devices`; radiator rooms also have `warm_up_rate` (degrees an hour), `warm_ups`, `preheating` and `preheat_from`. |
 | `select.hearth_house_mode` | Home, Away or Holiday. Point presence automations here. |
 | `binary_sensor.hearth_radiators_want_heat` | On while the boiler is wanted for the radiators. Its attributes list which rooms are asking. |
 
