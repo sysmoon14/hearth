@@ -4,7 +4,7 @@
 // commands (panel.py); schedules, modes, boosts and Home/Away/Holiday through
 // Hearth's own actions and entities, the same ones the cards use.
 
-const VERSION = "0.4.0";
+const VERSION = "0.4.1";
 const MAX_CHANGES = 6;
 const DAYS = [["weekdays", "Weekdays · Mon–Fri"], ["weekends", "Weekends · Sat–Sun"]];
 const HOUSE = [["home", "Home"], ["away", "Away"], ["holiday", "Holiday"]];
@@ -405,15 +405,13 @@ class HearthPanel extends HTMLElement {
     if (room.kind !== "radiator") {
       return card("The stat's own", "grey", `<span class="muted">The Heatmiser stat warms the floor early (its optimum start) so each level is reached on time. When it does, ${esc(room.name)} says “Warming up early”.</span>`);
     }
-    if (!room.sensor) {
-      return card("Needs a sensor", "grey", `<span class="muted">The valve's own reading warms with the radiator, not the room, so Hearth can't tell how fast ${esc(room.name)} warms. Add a room sensor and it will start learning.</span>`);
-    }
     const max = Number(this._info.settings.preheat_max_minutes);
     const n = a.warm_ups || 0;
     const hist = a.warm_ups_from_history || 0;
     const learned = `${n} warm-up${n === 1 ? "" : "s"}${hist ? ` (${hist} from history)` : ""}`;
+    const valve = room.sensor ? "" : ` Timed by the valve's own reading, the one ${esc(room.name)} decides it's warm by; with no room sensor there was no history to start from.`;
     if (a.warm_up_rate == null) {
-      return card("Learning", "grey", `<span class="muted">Hearth times each warm-up, from asking for heat to reaching the target. It has seen ${learned} so far, and starts early once it has seen 2.</span>`);
+      return card("Learning", "grey", `<span class="muted">Hearth times each warm-up, from asking for heat to reaching the target. It has seen ${learned} so far, and starts early once it has seen 2.${valve}</span>`);
     }
     const rate = Number(a.warm_up_rate);
     const perDeg = Math.round(60 / rate);
@@ -425,7 +423,7 @@ class HearthPanel extends HTMLElement {
     return card(a.preheating ? "Warming up" : max ? "On" : "Off", a.preheating ? "heat" : max ? "ok" : "grey", `
       <div class="kv"><span>Warms about<span class="sub">Learned from ${learned}</span></span><span>${rate.toFixed(1)}° an hour</span></div>
       <div class="kv"><span>A degree takes<span class="sub">Including the boiler and radiators getting hot</span></span><span>${perDeg} min</span></div>
-      <span class="muted">${esc(now)}</span>`);
+      <span class="muted">${esc(now)}${valve}</span>`);
   }
 
   async _drawHistory(room) {

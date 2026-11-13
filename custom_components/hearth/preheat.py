@@ -6,12 +6,13 @@ radiators getting hot are part of it). Two sources:
 
 - Warm-ups Hearth sees: from a room starting to ask for heat to it reaching
   its target.
-- The recorder's history, once per room: each time the boiler fired, how far
-  and how fast the room's sensor rose. Rooms whose valves were shut didn't
-  rise, so small rises are left out.
+- The recorder's history, once per room with its own sensor: each time the
+  boiler fired, how far and how fast the sensor rose. Rooms whose valves
+  were shut didn't rise, so small rises are left out.
 
-Only rooms with their own sensor learn. A valve's own sensor sits on the
-radiator and warms with it, not with the room.
+A room on its valve's own sensor learns from that reading, the same one it
+decides it's warm by, but has no history to start from: the valve's reading
+before Hearth ran doesn't say what the room was aiming for.
 
 The rate a room warms at is the median of its recent warm-ups, in degrees an
 hour. To reach a warmer schedule change on time, a room starts

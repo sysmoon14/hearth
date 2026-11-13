@@ -172,3 +172,23 @@ async def test_a_new_room_learns_from_the_boilers_history(hass: HomeAssistant, h
     room = hass.states.get(ROOM)
     assert room.attributes["warm_ups_from_history"] == 2
     assert room.attributes["warm_up_rate"] == 1.69
+
+
+async def test_a_room_on_its_valves_reading_learns_but_isnt_seeded(hass: HomeAssistant, house, calls, freezer) -> None:
+    freezer.move_to(dt_util.as_utc(dt_util.parse_datetime("2026-11-13T06:50:00+00:00")))
+    hass.config.components.add("recorder")
+    hass.states.async_set(OFFICE_TRV, "heat", {"temperature": 16.0, "current_temperature": 16.0, "hvac_action": "idle"})
+    valve_only = {k: v for k, v in OFFICE.items() if k != "sensor"}
+    with patch("homeassistant.components.recorder.get_instance") as recorder:
+        entry = await _setup(hass, calls, [valve_only])
+    recorder.assert_not_called()  # no sensor, no history to read
+    zone = entry.runtime_data.zones["office"]
+    assert zone.state.learned_with == "valves" and not zone.state.seeded
+
+    await _tick(hass, freezer, "2026-11-13T07:00:30+00:00")
+    assert hass.states.get(ROOM).attributes["calling_for_heat"]
+    attrs = dict(hass.states.get(OFFICE_TRV).attributes, current_temperature=19.3)
+    hass.states.async_set(OFFICE_TRV, "heat", attrs)
+    await _tick(hass, freezer, "2026-11-13T07:30:30+00:00")
+    assert [(round(w.rise, 1), w.minutes, w.source) for w in zone.state.warmups] == [(3.3, 30.0, "seen")]
+    assert hass.states.get(ROOM).attributes["warm_ups"] == 1

@@ -7,8 +7,8 @@ differs is only how that reaches the hardware:
 - RadiatorZone: Home Assistant runs the schedule. It sets the valves'
   targets, feeds them the room's real temperature, and tells the house
   whether the boiler is wanted.
-  Rooms with their own sensor learn how fast they warm and start early
-  for a warmer change, so it's reached on time (see preheat.py).
+  Rooms learn how fast they warm and start early for a warmer change, so
+  it's reached on time (see preheat.py).
 - UnderfloorZone: the Heatmiser stat runs the schedule itself, written to
   the neoHub as a profile, so the stat keeps its own optimum start and
   carries on if Home Assistant is down.
@@ -426,8 +426,9 @@ class RadiatorZone(Zone):
 
     # --- warming up early -------------------------------------------------
     def _time_warm_up(self, now: datetime, was: bool, target: float) -> None:
-        """Time each warm-up, from asking for heat to reaching the target."""
-        room = self._sensor_temp()
+        """Time each warm-up, from asking for heat to reaching the target, by
+        the same reading the room decides it's warm by."""
+        room = self.room_temp()
         if room is None:
             self._warming = None
             return
@@ -459,12 +460,12 @@ class RadiatorZone(Zone):
 
     def warm_rate(self) -> float | None:
         """Degrees an hour, once the room has seen enough warm-ups."""
-        return preheat.rate(self.state.warmups) if self.sensor else None
+        return preheat.rate(self.state.warmups)
 
     def warm_from(self, now: datetime, upcoming: tuple[datetime, float] | None = None) -> datetime | None:
         """When the room should start warming for its next change."""
         upcoming = upcoming or self.next_scheduled(now)
-        room = self._sensor_temp()
+        room = self.room_temp()
         if upcoming is None or room is None:
             return None
         lead = preheat.lead_minutes(upcoming[1] - room, self.warm_rate(), self._setting(CONF_PREHEAT_MAX))
@@ -577,9 +578,10 @@ class RadiatorZone(Zone):
     async def async_start(self) -> None:
         """Start learning afresh if the room's sensor changed, and give a new
         zone with the default schedule the valve's own."""
-        if self.state.learned_with != self.sensor:
+        source = self.sensor or "valves"
+        if self.state.learned_with != source:
             self.state.warmups, self.state.seeded = [], False
-            self.state.learned_with = self.sensor
+            self.state.learned_with = source
             self.hub.async_save()
         await self._adopt_valve_schedule()
 
@@ -602,7 +604,7 @@ class RadiatorZone(Zone):
     def attributes(self, now: datetime) -> dict[str, Any]:
         attrs = {**super().attributes(now), "devices": self.trvs}
         rate = self.warm_rate()
-        warmups = self.state.warmups if self.sensor else []
+        warmups = self.state.warmups
         preheating = self.preheating(now)
         upcoming = self.next_scheduled(now)
         start = None
