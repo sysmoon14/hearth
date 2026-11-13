@@ -386,7 +386,7 @@ class HearthPanel extends HTMLElement {
         ${room.kind === "radiator" ? `<div class="kv"><span>Turning the valve by hand<span class="sub">Counts the same as − or +</span></span><span>On</span></div>` : ""}
         <div class="kv"><span>Away · Holiday<span class="sub">Set on the House tab</span></span><span>${deg(this._info.settings.away_temp)} · ${deg(this._info.settings.holiday_temp)}</span></div>
         ${backup ? `<div class="kv"><span>The Nest's backup<span class="sub">The Nest keeps this room's schedule as its own</span></span><span class="good">Yes</span></div>` : ""}
-        <div class="row wrap" style="padding-top:12px">
+        <div class="row flexwrap" style="padding-top:12px">
           <button class="btn" data-act="edit-schedule" data-id="${esc(room.id)}">Edit schedule</button>
           <button class="btn" data-act="edit" data-id="${esc(room.id)}">Change devices</button>
           <button class="btn danger" data-act="remove" data-id="${esc(room.id)}">Remove</button>
@@ -470,11 +470,11 @@ class HearthPanel extends HTMLElement {
     const mode = { auto: "Schedule", heat: `Fixed ${deg(st?.attributes?.temperature)}`, off: "Off" }[st?.state] || "unavailable";
     const ufh = room.kind === "underfloor";
     return `<div class="wrap stack">
-      <div class="row wrap" role="group" aria-label="Room">${rooms.map((r) =>
+      <div class="row flexwrap" role="group" aria-label="Room">${rooms.map((r) =>
         `<button class="pill ${r.id === s.zone ? "on" : ""}" data-act="sched-room" data-id="${esc(r.id)}" aria-pressed="${r.id === s.zone}">${esc(r.name)}</button>`).join("")}</div>
       <div class="split">
         <section class="card main stack">
-          <div class="row between wrap">
+          <div class="row between flexwrap">
             <div class="seg" role="group" aria-label="Days">${DAYS.map(([k, label]) =>
               `<button data-act="sched-day" data-day="${k}" class="${s.day === k ? "on" : ""}" aria-pressed="${s.day === k}">${label}</button>`).join("")}</div>
             <span class="small ${n >= MAX_CHANGES ? "warntext" : "muted"}">${n} of ${MAX_CHANGES} changes</span>
@@ -490,7 +490,7 @@ class HearthPanel extends HTMLElement {
               <button class="round sm" data-act="sched-temp" data-i="${i}" data-step="0.5" aria-label="Warmer">+</button>
               <button class="icon" data-act="sched-del" data-i="${i}" aria-label="Remove this change" ${n <= 1 ? "disabled" : ""}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
             </div></div>`).join("")}</div>
-          <div class="row wrap">
+          <div class="row flexwrap">
             <button class="btn dashed" data-act="sched-add" ${n >= MAX_CHANGES ? "disabled" : ""}>+ Add a change</button>
             <button class="btn" data-act="sched-copyday">Copy to ${other}</button>
             ${rooms.length > 1 ? `<button class="btn" data-act="sched-copyrooms">Copy to other rooms…</button>` : ""}
@@ -532,7 +532,7 @@ class HearthPanel extends HTMLElement {
     return `<div class="wrap split">
       <div class="main stack">
         <section class="card stack">
-          <div class="row between wrap"><h2>How the radiators get heat</h2>
+          <div class="row between flexwrap"><h2>How the radiators get heat</h2>
             <span class="chip ${demand?.state === "on" ? "heat" : "ok"}">${demand?.state === "on" ? `Asking · ${esc((demand.attributes.rooms_asking || []).join(", "))}` : "Idle"}</span></div>
           <div class="flow" aria-label="How a room's ask reaches the boiler">
             <span class="node">A room below target</span><span aria-hidden="true">→</span>
@@ -557,7 +557,7 @@ class HearthPanel extends HTMLElement {
           </details>
         </section>
         <section class="card stack">
-          <div class="row between wrap"><h2>Rooms</h2><button class="btn solid" data-act="add">Add a room</button></div>
+          <div class="row between flexwrap"><h2>Rooms</h2><button class="btn solid" data-act="add">Add a room</button></div>
           ${i.rooms.length ? i.rooms.map((r) => `<div class="kv">
             <span>${esc(r.name)}<span class="sub">${r.kind === "radiator"
               ? `Radiator · ${esc(r.trvs.map((t) => this._name(t)).join(", "))} · ${r.sensor ? esc(this._name(r.sensor)) : "no room sensor (uses the valve's)"}`
@@ -941,10 +941,10 @@ const STYLE = `
   --hp-card:var(--card-background-color,#1c1c1c);--hp-line:var(--divider-color,rgba(127,127,127,.25));color:var(--primary-text-color);font-family:var(--paper-font-body1_-_font-family,Roboto,system-ui,sans-serif)}
 *{box-sizing:border-box}
 .page{height:100%;display:flex;flex-direction:column;background:var(--primary-background-color)}
-.bar{display:flex;align-items:center;gap:12px;min-height:56px;padding:4px 16px;background:var(--app-header-background-color,var(--hp-card));color:var(--app-header-text-color,var(--primary-text-color));border-bottom:1px solid var(--hp-line);flex-wrap:wrap}
+.bar{flex:none;display:flex;align-items:center;gap:12px;min-height:56px;padding:4px 16px;background:var(--app-header-background-color,var(--hp-card));color:var(--app-header-text-color,var(--primary-text-color));border-bottom:1px solid var(--hp-line);flex-wrap:wrap}
 .bar h1{margin:0;font-size:20px;font-weight:400}
 .grow{flex:1 1 auto}
-.tabs{display:flex;gap:4px;padding:0 12px;background:var(--app-header-background-color,var(--hp-card));border-bottom:1px solid var(--hp-line);overflow-x:auto}
+.tabs{flex:none;display:flex;gap:4px;padding:0 12px;background:var(--app-header-background-color,var(--hp-card));border-bottom:1px solid var(--hp-line);overflow-x:auto}
 .tabs button{flex:none;height:48px;padding:0 18px;border:0;border-bottom:2px solid transparent;background:none;color:var(--secondary-text-color);font:inherit;font-size:14px;font-weight:500;cursor:pointer}
 .tabs button.on{color:var(--primary-color);border-bottom-color:var(--primary-color)}
 .content{flex:1 1 auto;overflow-y:auto}
@@ -956,7 +956,7 @@ const STYLE = `
 .stack{display:flex;flex-direction:column;gap:14px}
 .stack.tight{gap:8px}
 .row{display:flex;align-items:center;gap:8px}
-.row.wrap{flex-wrap:wrap}
+.row.flexwrap{flex-wrap:wrap}
 .row.between{justify-content:space-between}
 .row.push,.push{margin-left:auto}
 .card{background:var(--hp-card);border:1px solid var(--hp-line);border-radius:var(--ha-card-border-radius,12px);padding:20px}

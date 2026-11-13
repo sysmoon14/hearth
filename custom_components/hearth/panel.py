@@ -82,7 +82,7 @@ async def async_show(hass: HomeAssistant) -> None:
     from homeassistant.components import panel_custom  # noqa: PLC0415
 
     await panel_custom.async_register_panel(
-        hass, frontend_url_path=PANEL, webcomponent_name="hearth-panel", sidebar_title="Heating",
+        hass, frontend_url_path=PANEL, webcomponent_name="hearth-panel", sidebar_title="Hearth",
         sidebar_icon="mdi:radiator", module_url=f"{FRONTEND_URL}/{PANEL_FILE}?v={VERSION}",
         require_admin=True, config={},
     )

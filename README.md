@@ -44,9 +44,9 @@ The house has one more control, **Home / Away / Holiday**:
 1. Open HACS, then ⋮ → Custom repositories. Add `https://github.com/sysmoon14/hearth` as an Integration.
 2. Download **Hearth** and restart Home Assistant.
 3. Go to Settings → Devices & services → Add integration → **Hearth**, and choose the thermostat that switches the boiler for your radiators.
-4. Open **Heating** in the sidebar (admins only) to add rooms, edit every room's schedule and change the house settings.
+4. Open **Hearth** in the sidebar (admins only) to add rooms, edit every room's schedule and change the house settings.
 
-## The Heating panel
+## The Hearth panel
 
 - **Rooms:** Home / Away / Holiday, what the boiler and the underfloor are doing, what happens if Home Assistant stops, a card per room with its "why" line, and every room's day on one strip. Open a room for its controls, today's temperature against its target, and its devices.
 - **Schedules:** one editor for every room: weekdays and weekends, up to six changes a day, copy to the other days or to other rooms.
