@@ -4,7 +4,7 @@
 // commands (panel.py); schedules, modes, boosts and Home/Away/Holiday through
 // Hearth's own actions and entities, the same ones the cards use.
 
-const VERSION = "0.3.0";
+const VERSION = "0.3.1";
 const MAX_CHANGES = 6;
 const DAYS = [["weekdays", "Weekdays · Mon–Fri"], ["weekends", "Weekends · Sat–Sun"]];
 const HOUSE = [["home", "Home"], ["away", "Away"], ["holiday", "Holiday"]];
@@ -299,11 +299,11 @@ class HearthPanel extends HTMLElement {
         <div class="muted small">The neoHub runs ${esc(ufh.map((r) => r.name).join(", "))} from the profiles Hearth wrote</div></div>`);
     }
     if (rads.length && (i.settings.boiler_switch || i.settings.boiler)) {
-      const big = i.settings.boiler_switch ? "Call for heat turned off" : `Thermostat left at ${deg(i.settings.fallback_temp)}`;
+      const big = i.settings.boiler_switch ? "It stops asking for heat" : `Thermostat left at ${deg(i.settings.fallback_temp)}`;
       cards.push(`<div class="card status-card">
         <div class="row between"><span class="caps">If Hearth stops</span><span class="chip ok">Covered</span></div>
         <div class="big">${big}</div>
-        <div class="muted small">${i.settings.boiler_switch ? "What happens then is up to whatever the switch drives" : "So the house can't go cold"}${ufh.length ? " · the stats carry on as they are" : ""}</div></div>`);
+        <div class="muted small">${i.settings.boiler_switch ? `By turning ${esc(this._name(i.settings.boiler_switch))} off · what happens next is up to what it drives` : "So the house can't go cold"}${ufh.length ? " · the stats carry on as they are" : ""}</div></div>`);
     }
     return cards.join("");
   }

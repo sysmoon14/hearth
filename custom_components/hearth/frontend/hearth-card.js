@@ -9,7 +9,7 @@
  *   show_house: false                        # hide the Home/Away/Holiday row
  */
 
-const VERSION = "0.3.0";
+const VERSION = "0.3.1";
 const MAX_CHANGES = 6;
 const MODES = [
   ["auto", "Schedule"],
