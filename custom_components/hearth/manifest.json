@@ -1,0 +1,23 @@
+{
+  "domain": "hearth",
+  "name": "Hearth",
+  "after_dependencies": [
+    "frontend",
+    "heatmiserneo",
+    "mqtt"
+  ],
+  "codeowners": [
+    "@sysmoon14"
+  ],
+  "config_flow": true,
+  "dependencies": [
+    "http"
+  ],
+  "documentation": "https://github.com/sysmoon14/hearth",
+  "integration_type": "helper",
+  "iot_class": "calculated",
+  "issue_tracker": "https://github.com/sysmoon14/hearth/issues",
+  "requirements": [],
+  "single_config_entry": true,
+  "version": "0.1.0"
+}

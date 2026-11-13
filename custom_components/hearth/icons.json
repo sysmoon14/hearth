@@ -1,0 +1,7 @@
+{
+  "entity": {
+    "select": { "house_mode": { "default": "mdi:home-thermometer", "state": { "away": "mdi:home-export-outline", "holiday": "mdi:airplane" } } },
+    "binary_sensor": { "radiator_demand": { "default": "mdi:radiator-off", "state": { "on": "mdi:radiator" } } }
+  },
+  "services": { "set_schedule": { "service": "mdi:calendar-clock" }, "boost": { "service": "mdi:fire" }, "cancel_boost": { "service": "mdi:fire-off" } }
+}
