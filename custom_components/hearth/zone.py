@@ -521,8 +521,6 @@ class UnderfloorZone(Zone):
     def _profile_for_mode(self) -> str:
         if self.state.mode == MODE_FIXED:
             return f"{self.profile} Fixed"
-        if self.state.mode == MODE_OFF:
-            return f"{self.profile} Off"
         return self.profile
 
     def _registry_find(self, domain: str, suffix: str, same_device: bool) -> str | None:
@@ -557,8 +555,7 @@ class UnderfloorZone(Zone):
         if st.mode == MODE_SCHEDULE:
             week, weekend = st.schedule[WEEKDAYS], st.schedule[WEEKENDS]
         else:
-            level = st.fixed if st.mode == MODE_FIXED else self._setting(CONF_OFF_TEMP)
-            week = weekend = [{"time": "00:00", "temp": level}]
+            week = weekend = [{"time": "00:00", "temp": st.fixed}]
         data = {
             "monday_times": [c["time"] for c in week],
             "monday_temperatures": [f"{c['temp']:g}" for c in week],
@@ -567,8 +564,21 @@ class UnderfloorZone(Zone):
         }
         return data, self._profile_for_mode()
 
+    @property
+    def in_standby(self) -> bool:
+        state = self._stat_state
+        return bool(state and state.attributes.get("preset_mode") == "standby")
+
     async def async_sync(self) -> None:
-        """Write the profile for the current mode and make the stat run it."""
+        """Write the profile for the current mode and make the stat run it.
+
+        Off is the stat's own standby, which keeps frost protection."""
+        if self.state.mode == MODE_OFF:
+            if not self.in_standby:
+                await self._call("climate", "set_preset_mode", {"entity_id": self.stat, "preset_mode": "standby"})
+            return
+        if self.in_standby:
+            await self._call("climate", "set_preset_mode", {"entity_id": self.stat, "preset_mode": "home"})
         sensor, select = self.profile_sensor, self.select
         if not sensor or not select:
             _LOGGER.warning("%s: can't find the neoHub's profile entities", self.name)
@@ -630,6 +640,11 @@ class UnderfloorZone(Zone):
 
     async def async_start(self) -> None:
         """Adopt whatever the stat is already running."""
+        if self.in_standby:
+            if self.state.mode != MODE_OFF:
+                self.state.mode = MODE_OFF
+                self.hub.async_save()
+            return
         select = self.select
         state = self.hass.states.get(select) if select else None
         if state is None or state.state in BAD_STATES:
@@ -641,11 +656,11 @@ class UnderfloorZone(Zone):
                 self.state.fixed = _float(stat.attributes.get(ATTR_TEMPERATURE)) if stat else self.state.fixed
             elif state.state == self.profile:
                 self.state.mode = MODE_SCHEDULE
-            elif state.state == f"{self.profile} Off":
-                self.state.mode = MODE_OFF
             self.hub.async_save()
 
     def desired(self, now: datetime) -> tuple[float, str]:
+        if self.state.mode == MODE_OFF and self.hub.house_mode != HOUSE_HOLIDAY and not self.boost_active(now):
+            return self._setting(CONF_OFF_TEMP), "Off: the thermostat keeps frost protection"
         temp, reason = super().desired(now)
         stat = self._stat_state
         stat_target = _float(stat.attributes.get(ATTR_TEMPERATURE)) if stat else None
@@ -664,7 +679,8 @@ class UnderfloorZone(Zone):
 
     def attributes(self, now: datetime) -> dict[str, Any]:
         state = self._stat_state
-        attrs = {**super().attributes(now), "devices": [self.stat], "profile": self._profile_for_mode()}
+        attrs = {**super().attributes(now), "devices": [self.stat],
+                 "profile": "standby" if self.state.mode == MODE_OFF else self._profile_for_mode()}
         if state is not None and state.attributes.get("hvac_action") == "preheating":
             attrs["reason"] = f"Warming up early for {_deg(_float(state.attributes.get(ATTR_TEMPERATURE)) or 0)}"
         return attrs

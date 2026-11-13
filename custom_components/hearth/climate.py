@@ -45,14 +45,13 @@ def _zone_ids(hub: Hearth) -> list[str]:
     return [z["id"] for z in hub.settings.get("zones", [])]
 
 
-class HearthClimate(HearthEntity, ClimateEntity):
+class _HearthClimate(HearthEntity, ClimateEntity):
     """A room."""
 
     _attr_name = None
     _attr_translation_key = "zone"
     _attr_hvac_modes = [HVACMode.AUTO, HVACMode.HEAT, HVACMode.OFF]
     _attr_preset_modes = [PRESET_NONE, PRESET_BOOST]
-    _attr_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_target_temperature_step = TEMP_STEP
     _attr_min_temp = MIN_TEMP
     _attr_max_temp = MAX_TEMP
@@ -74,7 +73,6 @@ class HearthClimate(HearthEntity, ClimateEntity):
             manufacturer="Hearth",
             model="Underfloor zone" if config.get("kind") == "underfloor" else "Radiator zone",
             sw_version=VERSION,
-            via_device=(DOMAIN, hub.entry.entry_id),
         )
 
     @property
@@ -84,14 +82,6 @@ class HearthClimate(HearthEntity, ClimateEntity):
     @property
     def available(self) -> bool:
         return self.zone_id in self.hub.zones
-
-    @property
-    def current_temperature(self) -> float | None:
-        return self.zone.room_temp()
-
-    @property
-    def target_temperature(self) -> float | None:
-        return self.zone.target()
 
     @property
     def hvac_mode(self) -> HVACMode:
@@ -133,3 +123,32 @@ class HearthClimate(HearthEntity, ClimateEntity):
             await self.zone.async_boost()
         else:
             await self.zone.async_cancel_boost()
+
+
+# Home Assistant 2026.11 moved climate temperatures to native_* names; older
+# versions only know the plain ones. Each gets the names it expects.
+if hasattr(ClimateEntity, "native_target_temperature"):
+
+    class HearthClimate(_HearthClimate):
+        _attr_native_temperature_unit = UnitOfTemperature.CELSIUS
+
+        @property
+        def native_current_temperature(self) -> float | None:
+            return self.zone.room_temp()
+
+        @property
+        def native_target_temperature(self) -> float | None:
+            return self.zone.target()
+
+else:
+
+    class HearthClimate(_HearthClimate):  # type: ignore[no-redef]
+        _attr_temperature_unit = UnitOfTemperature.CELSIUS
+
+        @property
+        def current_temperature(self) -> float | None:
+            return self.zone.room_temp()
+
+        @property
+        def target_temperature(self) -> float | None:
+            return self.zone.target()

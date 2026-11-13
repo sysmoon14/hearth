@@ -151,6 +151,14 @@ async def test_underfloor_writes_profiles(hass: HomeAssistant, house, calls, fre
     assert written["name"] == "HA Kitchen Fixed"
     assert written["monday_times"] == ["00:00"]
 
+    # Off is the stat's own standby; back to Schedule leaves it.
+    await hass.services.async_call("climate", "set_hvac_mode", {"entity_id": room, "hvac_mode": "off"}, blocking=True)
+    assert hass.states.get(KITCHEN).attributes["preset_mode"] == "standby"
+    assert hass.states.get(room).attributes["reason"].startswith("Off")
+    await hass.services.async_call("climate", "set_hvac_mode", {"entity_id": room, "hvac_mode": "auto"}, blocking=True)
+    assert hass.states.get(KITCHEN).attributes["preset_mode"] == "home"
+    assert calls.of("select", "select_option")[-1]["option"] == "HA Kitchen"
+
     # Boost holds on the stat; Away holds too, Holiday uses the hub.
     await hass.services.async_call("hearth", "boost", {"entity_id": room}, blocking=True)
     assert calls.of("heatmiserneo", "hold_on")[-1]["hold_temperature"] == 22.0
