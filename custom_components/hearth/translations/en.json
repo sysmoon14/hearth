@@ -17,6 +17,12 @@
     }
   },
   "options": {
+    "step": {
+      "init": {
+        "title": "Hearth",
+        "description": "Rooms and house settings are in the Hearth panel: open Hearth in the sidebar."
+      }
+    },
     "abort": {
       "use_panel": "Rooms and house settings are in the Hearth panel: open Hearth in the sidebar."
     }
