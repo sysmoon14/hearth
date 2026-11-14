@@ -103,6 +103,7 @@ title: Upstairs
 - `hearth.set_schedule`: set a room's `weekdays` and `weekends`, each a list like `[{"time": "06:30", "temp": 19}, {"time": "22:30", "temp": 16}]`.
 - `hearth.boost`: boost a room, with optional `minutes` and `temperature`.
 - `hearth.cancel_boost`: end a boost early.
+- `hearth.add_warm_up`: tell a room about a warm-up it didn't time itself, with `rise` (degrees) and `minutes`. It counts until the room has seen two of its own.
 - `hearth.set_holiday`: put the house on Holiday, with an optional `until` (like `2026-12-28 16:00:00`) when it goes back to Home by itself.
 
 ## When something looks wrong

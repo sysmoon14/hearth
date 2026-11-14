@@ -14,6 +14,7 @@ from .const import (
     DOMAIN,
     SERVICE_BOOST,
     HOUSE_HOLIDAY,
+    SERVICE_ADD_WARM_UP,
     SERVICE_CANCEL_BOOST,
     SERVICE_SET_HOLIDAY,
     SERVICE_SET_SCHEDULE,
@@ -22,6 +23,8 @@ from .const import (
 )
 from homeassistant.util import dt as dt_util
 
+from . import preheat
+from .preheat import WarmUp
 from .schedule import ScheduleError
 from .zone import Zone
 
@@ -42,6 +45,13 @@ BOOST_SCHEMA = vol.Schema(
     }
 )
 ENTITY_SCHEMA = vol.Schema({vol.Required(ATTR_ENTITY_ID): cv.entity_ids})
+WARM_UP_SCHEMA = vol.Schema(
+    {
+        vol.Required(ATTR_ENTITY_ID): cv.entity_ids,
+        vol.Required("rise"): vol.All(vol.Coerce(float), vol.Range(min=preheat.MIN_RISE, max=15)),
+        vol.Required("minutes"): vol.All(vol.Coerce(float), vol.Range(min=preheat.MIN_MINUTES, max=preheat.MAX_MINUTES)),
+    }
+)
 HOLIDAY_SCHEMA = vol.Schema({vol.Optional("until"): cv.datetime})
 
 
@@ -78,6 +88,15 @@ def async_setup_services(hass: HomeAssistant) -> None:
     async def cancel_boost(call: ServiceCall) -> None:
         for zone in _zones(hass, call):
             await zone.async_cancel_boost()
+
+    async def add_warm_up(call: ServiceCall) -> None:
+        """Tell a room about a warm-up it didn't time itself, so it can start
+        early before it has seen two of its own."""
+        for zone in _zones(hass, call):
+            zone.learn(WarmUp(call.data["rise"], call.data["minutes"], dt_util.utcnow(), "told"))
+            await zone.hub.async_evaluate()
+
+    hass.services.async_register(DOMAIN, SERVICE_ADD_WARM_UP, add_warm_up, WARM_UP_SCHEMA)
 
     async def set_holiday(call: ServiceCall) -> None:
         entries = [e for e in hass.config_entries.async_entries(DOMAIN) if e.state is ConfigEntryState.LOADED]

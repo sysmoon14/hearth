@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.0b5
+
+- A new action, `hearth.add_warm_up`, tells a room about a warm-up it didn't time itself (how far it rose, and how long that took), so a room that's still learning can start early straight away. What it's told counts until the room has seen two warm-ups of its own.
+
 ## 1.0.0b4
 
 **When something's wrong**
