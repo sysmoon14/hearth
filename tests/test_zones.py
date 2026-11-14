@@ -368,3 +368,97 @@ async def test_removing_a_room_removes_its_device(hass: HomeAssistant, house, ca
     assert registry.async_get_device(identifiers={("hearth", f"{entry.entry_id}_office")}) is None
     assert registry.async_get_device(identifiers={("hearth", f"{entry.entry_id}_kitchen")}) is not None
     assert registry.async_get_device(identifiers={("hearth", entry.entry_id)}) is not None
+
+
+async def _tick(hass: HomeAssistant, freezer, **delta) -> None:
+    freezer.tick(timedelta(**delta))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+
+
+def _valve(hass: HomeAssistant, action: str) -> None:
+    trv = hass.states.get(OFFICE_TRV)
+    hass.states.async_set(OFFICE_TRV, trv.state, {**trv.attributes, "hvac_action": action})
+
+
+async def test_a_room_stops_asking_at_its_target(hass: HomeAssistant, house, calls, freezer) -> None:
+    # 19° from 07:00. Calling from 18°; at 19.0° exactly it stops, not at 19.2°.
+    freezer.move_to(dt_util.as_utc(dt_util.parse_datetime("2026-11-13T07:30:00+00:00")))
+    await _setup(hass, calls, [OFFICE])
+    assert hass.states.get(ROOM).attributes["calling_for_heat"]
+    hass.states.async_set(OFFICE_SENSOR, "19.0")
+    await _tick(hass, freezer, seconds=35)
+    assert not hass.states.get(ROOM).attributes["calling_for_heat"]
+    assert hass.states.get(RELAY).state == "off"
+
+
+async def test_a_room_whose_valves_shut_stops_asking(hass: HomeAssistant, house, calls, freezer) -> None:
+    freezer.move_to(dt_util.as_utc(dt_util.parse_datetime("2026-11-13T07:30:00+00:00")))
+    await _setup(hass, calls, [OFFICE])
+    # Warming, nearly there (18.8° for 19°): still asking while the valve's open.
+    _valve(hass, "heating")
+    hass.states.async_set(OFFICE_SENSOR, "18.8")
+    await _tick(hass, freezer, seconds=35)
+    assert hass.states.get(ROOM).attributes["calling_for_heat"]
+
+    # The valve shuts: a few minutes' grace, then the room stops asking.
+    _valve(hass, "idle")
+    await _tick(hass, freezer, seconds=35)
+    await _tick(hass, freezer, minutes=3)
+    assert hass.states.get(ROOM).attributes["calling_for_heat"]
+    await _tick(hass, freezer, minutes=3)
+    assert not hass.states.get(ROOM).attributes["calling_for_heat"]
+    assert hass.states.get(RELAY).state == "off"
+
+    # Cooling past the band asks again, valve shut or not.
+    hass.states.async_set(OFFICE_SENSOR, "18.6")
+    await _tick(hass, freezer, seconds=35)
+    assert hass.states.get(ROOM).attributes["calling_for_heat"]
+
+
+def _stat_preset(hass: HomeAssistant, preset: str) -> None:
+    stat = hass.states.get(KITCHEN)
+    hass.states.async_set(KITCHEN, stat.state, {**stat.attributes, "preset_mode": preset})
+
+
+async def test_underfloor_turned_off_and_on_at_the_stat(hass: HomeAssistant, house, calls, freezer) -> None:
+    freezer.move_to(dt_util.as_utc(dt_util.parse_datetime("2026-11-13T12:00:00+00:00")))
+    await _setup(hass, calls, [KITCHEN_ZONE])
+    room = "climate.kitchen_2"
+    _stat_preset(hass, "home")
+    await _tick(hass, freezer, minutes=3)  # past anything Hearth sent at start
+    assert hass.states.get(room).attributes["mode"] == "schedule"
+    writes = len(calls.of("heatmiserneo", "create_profile_two"))
+
+    # Someone presses power on the stat: the room is Off straight away, and
+    # Hearth doesn't fight it.
+    _stat_preset(hass, "standby")
+    await hass.async_block_till_done()
+    state = hass.states.get(room)
+    assert state.state == "off" and state.attributes["mode"] == "off"
+    assert state.attributes["reason"] == "Off: turned off on the thermostat"
+    assert state.attributes["status"] == "Off"
+    assert len(calls.of("heatmiserneo", "create_profile_two")) == writes
+
+    # And back on at the stat: the room's on its schedule again, profile rewritten.
+    await _tick(hass, freezer, minutes=1)
+    _stat_preset(hass, "home")
+    await hass.async_block_till_done()
+    state = hass.states.get(room)
+    assert state.attributes["mode"] == "schedule"
+    assert len(calls.of("heatmiserneo", "create_profile_two")) == writes + 1
+    assert calls.of("select", "select_option")[-1]["option"] == "HA Kitchen"
+
+
+async def test_underfloor_off_from_hearth_isnt_taken_for_the_stat(hass: HomeAssistant, house, calls, freezer) -> None:
+    freezer.move_to(dt_util.as_utc(dt_util.parse_datetime("2026-11-13T12:00:00+00:00")))
+    await _setup(hass, calls, [KITCHEN_ZONE])
+    room = "climate.kitchen_2"
+    await hass.services.async_call("climate", "set_hvac_mode", {"entity_id": room, "hvac_mode": "off"}, blocking=True)
+    await hass.async_block_till_done()
+    assert hass.states.get(room).attributes["reason"] == "Off: the thermostat keeps frost protection"
+    # Hearth turns it back on; the stat's late report of standby is ignored.
+    await hass.services.async_call("climate", "set_hvac_mode", {"entity_id": room, "hvac_mode": "auto"}, blocking=True)
+    _stat_preset(hass, "standby")
+    await hass.async_block_till_done()
+    assert hass.states.get(room).attributes["mode"] == "schedule"

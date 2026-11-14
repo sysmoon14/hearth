@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 DOMAIN = "hearth"
-VERSION = "1.0.0b2"
+VERSION = "1.0.0b3"
 
 # Zone kinds
 KIND_RADIATOR = "radiator"
@@ -68,9 +68,14 @@ DEFAULTS = {
     CONF_PREHEAT_MAX: 180,
 }
 
-# Hysteresis for a radiator room asking for heat.
+# Hysteresis for a radiator room asking for heat: from 0.3° below its
+# target until it gets there. The valves shut at the target, so asking for
+# more than that only fires the boiler into closed radiators.
 DEMAND_BELOW = 0.3
-DEMAND_ABOVE = 0.2
+DEMAND_ABOVE = 0.0
+# A room whose valves have all been shut this long stops asking, once it's
+# within the band: no radiator in it can take the heat.
+VALVES_SHUT_MINUTES = 5
 
 # How often an outside temperature is re-sent to a valve even if unchanged,
 # so the valve never falls back to its own sensor.

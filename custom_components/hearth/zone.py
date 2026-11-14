@@ -45,6 +45,7 @@ from .const import (
     DEFAULT_SCHEDULE,
     DEMAND_ABOVE,
     DEMAND_BELOW,
+    VALVES_SHUT_MINUTES,
     EXTERNAL_REFRESH_SECONDS,
     HOUSE_AWAY,
     HOUSE_HOLIDAY,
@@ -500,6 +501,8 @@ class RadiatorZone(Zone):
         self._sent_external: dict[str, tuple[float, float]] = {}
         # The schedule change the room is warming up early for.
         self._early_for: datetime | None = None
+        # Since when every valve has said it's shut.
+        self._shut_since: datetime | None = None
 
     def watched_entities(self) -> list[str]:
         return [*self.trvs, *super().watched_entities()]
@@ -522,16 +525,29 @@ class RadiatorZone(Zone):
             for e in self.trvs
         )
 
+    def valves_shut(self) -> bool:
+        """Every valve is there and says it isn't heating."""
+        states = [self.hass.states.get(e) for e in self.trvs]
+        return bool(states) and all(
+            s is not None and s.state not in BAD_STATES and s.attributes.get("hvac_action") == "idle"
+            for s in states
+        )
+
     def update_demand(self, now: datetime) -> bool:
         """Whether this room wants the boiler, with a little hysteresis."""
         target = self.desired(now)[0]
         room = self.room_temp()
         was = self.calling
+        if self.valves_shut():
+            self._shut_since = self._shut_since or now
+        else:
+            self._shut_since = None
+        shut_a_while = self._shut_since is not None and now - self._shut_since >= timedelta(minutes=VALVES_SHUT_MINUTES)
         if room is None:
             self.calling = self.valves_heating()
         elif room < target - DEMAND_BELOW:
             self.calling = True
-        elif room >= target + DEMAND_ABOVE:
+        elif room >= target + DEMAND_ABOVE or shut_a_while:
             self.calling = False
         self._time_warm_up(now, was, target)
         return self.calling
@@ -704,6 +720,8 @@ class UnderfloorZone(Zone):
         # background, once more if something changed meanwhile.
         self._syncing: asyncio.Task | None = None
         self._sync_again = False
+        # Turned off on the stat itself, not from Hearth.
+        self._off_on_stat = False
 
     def _sent(self) -> None:
         self._settle_until = monotonic.monotonic() + STAT_SETTLE
@@ -714,6 +732,34 @@ class UnderfloorZone(Zone):
 
     def watched_entities(self) -> list[str]:
         return [self.stat, *super().watched_entities()]
+
+    def handle_state_change(self, entity_id: str, old: State | None, new: State | None) -> None:
+        """Someone turned the stat off (standby) or back on at the stat: the
+        room follows, so Hearth never shows a room on its schedule while its
+        floor is off. Hearth's own changes are still settling, so skip those."""
+        if entity_id != self.stat or old is None or new is None:
+            return
+        was = old.attributes.get("preset_mode") == "standby"
+        now_standby = new.attributes.get("preset_mode") == "standby"
+        if was == now_standby or self._settling or self.syncing:
+            return
+        if now_standby and self.state.mode != MODE_OFF:
+            _LOGGER.info("%s turned off on the thermostat", self.name)
+            self.hass.async_create_task(self._turned_off_on_stat())
+        elif not now_standby and self.state.mode == MODE_OFF and not self.boost_active(dt_util.utcnow()):
+            _LOGGER.info("%s turned back on at the thermostat", self.name)
+            self.hass.async_create_task(self.async_set_mode(MODE_SCHEDULE))
+
+    async def _turned_off_on_stat(self) -> None:
+        self.state.mode = MODE_OFF
+        self.state.override_temp = None
+        self.state.override_until = None
+        self._off_on_stat = True
+        await self._changed(sync=False)
+
+    async def async_set_mode(self, mode: str) -> None:
+        self._off_on_stat = False
+        await super().async_set_mode(mode)
 
     @property
     def _stat_state(self) -> State | None:
@@ -936,6 +982,7 @@ class UnderfloorZone(Zone):
         if self.in_standby:
             if self.state.mode != MODE_OFF:
                 self.state.mode = MODE_OFF
+                self._off_on_stat = True
                 self.hub.async_save()
             return
         select = self.select
@@ -953,6 +1000,8 @@ class UnderfloorZone(Zone):
 
     def desired(self, now: datetime) -> tuple[float, str]:
         if self.state.mode == MODE_OFF and self.hub.house_mode != HOUSE_HOLIDAY and not self.boost_active(now):
+            if self._off_on_stat:
+                return self._setting(CONF_OFF_TEMP), "Off: turned off on the thermostat"
             return self._setting(CONF_OFF_TEMP), "Off: the thermostat keeps frost protection"
         temp, reason = super().desired(now)
         upcoming = self.next_scheduled(now)

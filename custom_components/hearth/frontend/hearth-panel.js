@@ -6,7 +6,7 @@
 
 import {
   VERSION, TICKS, boostLabel, clamp, copy, deg, esc, heating, mins, nowPct, num, preheating, reasonOf, statusOf, stripHtml, targetLabel, todayBlocks,
-} from "./hearth-common.js?v=1.0.0b2";
+} from "./hearth-common.js?v=1.0.0b3";
 
 const HOUSE = [["home", "Home"], ["away", "Away"], ["holiday", "Holiday"]];
 const MODES = [["auto", "Schedule"], ["heat", "Fixed"], ["off", "Off"]];
