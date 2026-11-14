@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from homeassistant.components.select import SelectEntity
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import HearthConfigEntry
-from .const import HOUSE_MODES
+from .const import CONF_BOOST_MINUTES, CONF_BOOST_TEMP, HOUSE_MODES
 from .entity import HearthEntity, house_device
 
 
@@ -31,6 +33,15 @@ class HouseMode(HearthEntity, SelectEntity):
     @property
     def current_option(self) -> str:
         return self.hub.house_mode
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """What a card's Boost button does, for cards that can't read the
+        house settings."""
+        return {
+            "boost_minutes": int(self.hub.settings[CONF_BOOST_MINUTES]),
+            "boost_temp": float(self.hub.settings[CONF_BOOST_TEMP]),
+        }
 
     async def async_select_option(self, option: str) -> None:
         await self.hub.async_set_house_mode(option)

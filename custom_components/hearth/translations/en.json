@@ -6,9 +6,12 @@
     "step": {
       "user": {
         "title": "Hearth",
-        "description": "Hearth runs every room's heating the same way, whatever heats it. Choose the thermostat that switches the boiler for your radiators, if you have any. You'll add rooms next, from Configure.",
+        "description": "Hearth runs every room's heating the same way, whatever heats it. Choose the switch that calls your boiler for heat for the radiators: Hearth turns it on while a room wants heat and off when none does. You can choose it later in the Hearth panel too. Add rooms from Hearth in the sidebar.",
         "data": {
-          "boiler": "Boiler thermostat for the radiators"
+          "boiler_switch": "Call for heat switch"
+        },
+        "data_description": {
+          "boiler_switch": "Any on/off switch: a boiler relay, a thermostat's call-for-heat switch, or a helper."
         }
       }
     }
@@ -17,63 +20,11 @@
     "step": {
       "init": {
         "title": "Hearth",
-        "menu_options": {
-          "add_radiator": "Add a room with radiator valves",
-          "add_underfloor": "Add an underfloor room (Heatmiser)",
-          "edit_zone": "Change a room",
-          "remove_zone": "Remove a room",
-          "settings": "House settings"
-        }
-      },
-      "add_radiator": {
-        "title": "Room with radiator valves",
-        "description": "Hearth runs this room's schedule, sets its valves, and switches the boiler on when it needs heat. A room sensor away from the radiator gives a truer reading than the valve's own.",
-        "data": {
-          "name": "Name",
-          "trvs": "Radiator valves",
-          "sensor": "Room temperature sensor"
-        }
-      },
-      "add_underfloor": {
-        "title": "Underfloor room",
-        "description": "The Heatmiser stat runs this room's schedule itself, so it keeps its own early start and carries on if Home Assistant is down. Hearth writes the schedule to the neoHub as a profile.",
-        "data": {
-          "name": "Name",
-          "stat": "Heatmiser thermostat",
-          "profile": "Profile name on the neoHub (default: Hearth and the room's name)",
-          "sensor": "Room temperature sensor"
-        }
-      },
-      "edit_zone": {
-        "title": "Change a room",
-        "data": {
-          "id": "Room"
-        }
-      },
-      "remove_zone": {
-        "title": "Remove a room",
-        "data": {
-          "id": "Room"
-        }
-      },
-      "settings": {
-        "title": "House settings",
-        "data": {
-          "boiler": "Boiler thermostat for the radiators",
-          "boiler_on_temp": "Thermostat set to this when radiators want heat",
-          "boiler_off_temp": "Thermostat set to this when they don't",
-          "fallback_temp": "Thermostat left at this if Hearth stops",
-          "demand_on_delay": "Wait before switching the boiler on",
-          "demand_off_delay": "Wait before switching it off",
-          "boost_temp": "Boost temperature",
-          "boost_minutes": "Boost length",
-          "preheat_max_minutes": "Radiator rooms warm up early by up to (0 turns it off)",
-          "away_temp": "Away: rooms held no warmer than",
-          "holiday_temp": "Holiday: rooms kept above",
-          "off_temp": "A room that's off is kept above",
-          "boiler_switch": "Call for heat switch (instead of setting the thermostat's temperature)"
-        }
+        "description": "Rooms and house settings are in the Hearth panel: open Hearth in the sidebar."
       }
+    },
+    "abort": {
+      "use_panel": "Rooms and house settings are in the Hearth panel: open Hearth in the sidebar."
     }
   },
   "entity": {

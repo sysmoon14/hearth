@@ -12,7 +12,7 @@ from pytest_homeassistant_custom_component.common import async_fire_time_changed
 from .conftest import (
     KITCHEN,
     KITCHEN_ZONE,
-    THERMOSTAT,
+    RELAY,
     OFFICE,
     OFFICE_SENSOR,
     OFFICE_TRV,
@@ -50,8 +50,8 @@ async def test_radiator_room_calls_for_heat(hass: HomeAssistant, house, calls, f
     # The valve is fed the room's temperature and told to use it.
     assert calls.of("number", "set_value")[-1] == {"entity_id": "number.office_trv_external_temperature_input", "value": 18.0}
     assert hass.states.get("select.office_trv_temperature_sensor_select").state == "remote_temperature"
-    # The boiler is on.
-    assert hass.states.get(THERMOSTAT).attributes["temperature"] == 25.0
+    # The boiler is asked for heat.
+    assert hass.states.get(RELAY).state == "on"
     assert hass.states.get("binary_sensor.hearth_radiators_want_heat").state == "on"
 
     # Warm room: boiler off.
@@ -60,7 +60,7 @@ async def test_radiator_room_calls_for_heat(hass: HomeAssistant, house, calls, f
     freezer.tick(timedelta(seconds=35))
     async_fire_time_changed(hass)
     await hass.async_block_till_done()
-    assert hass.states.get(THERMOSTAT).attributes["temperature"] == 10.0
+    assert hass.states.get(RELAY).state == "off"
 
 
 async def test_plus_minus_overrides_until_next_change(hass: HomeAssistant, house, calls, freezer) -> None:
@@ -72,7 +72,7 @@ async def test_plus_minus_overrides_until_next_change(hass: HomeAssistant, house
     assert room.state == "auto"
     assert room.attributes["temperature"] == 21
     assert hass.states.get(OFFICE_TRV).attributes["temperature"] == 21
-    assert "until 10:00, then the schedule" in room.attributes["reason"]
+    assert room.attributes["reason"] == "21° until 10:00, then 16°"
 
     freezer.move_to(dt_util.as_utc(dt_util.parse_datetime("2026-11-13T10:00:30+00:00")))
     async_fire_time_changed(hass)
@@ -165,56 +165,81 @@ async def test_underfloor_writes_profiles(hass: HomeAssistant, house, calls, fre
     await hass.services.async_call("select", "select_option", {"entity_id": "select.hearth_house_mode", "option": "holiday"}, blocking=True)
     assert calls.of("heatmiserneo", "set_away_mode")[-1] == {"entity_id": "binary_sensor.neohub_away", "away": True}
 
-    # Underfloor rooms don't switch the boiler.
-    assert hass.states.get(THERMOSTAT).attributes["temperature"] == 18.0
+    # Underfloor rooms don't call for heat through Hearth.
+    assert hass.states.get(RELAY).state == "off"
 
 
-async def test_unload_leaves_boiler_safe(hass: HomeAssistant, house, calls, freezer) -> None:
+async def test_the_switch_follows_the_rooms(hass: HomeAssistant, house, calls, freezer) -> None:
+    """On while a room wants heat, off otherwise; unavailable, nothing to do."""
     freezer.move_to(dt_util.as_utc(dt_util.parse_datetime("2026-11-13T07:30:00+00:00")))
-    entry = await _setup(hass, calls, [OFFICE])
-    assert await hass.config_entries.async_unload(entry.entry_id)
-    assert hass.states.get(THERMOSTAT).attributes["temperature"] == 17.0
-
-
-async def test_calling_for_heat_with_a_switch(hass: HomeAssistant, house, calls, freezer) -> None:
-    """Any on/off switch: on while a room wants heat, off otherwise, and the
-    thermostat is left alone."""
-    freezer.move_to(dt_util.as_utc(dt_util.parse_datetime("2026-11-13T07:30:00+00:00")))
-    relay = "switch.boiler_relay"
-    hass.states.async_set(relay, "off")
-    calls.register("switch", "turn_on", lambda d: hass.states.async_set(relay, "on"))
-    calls.register("switch", "turn_off", lambda d: hass.states.async_set(relay, "off"))
-    entry = await _setup(hass, calls, [OFFICE], boiler_switch=relay)
-
-    assert calls.of("switch", "turn_on") == [{"entity_id": relay}]
-    assert hass.states.get(relay).state == "on"
-    assert hass.states.get(THERMOSTAT).attributes["temperature"] == 18.0, "no temperatures set"
+    await _setup(hass, calls, [OFFICE])
+    assert calls.of("switch", "turn_on") == [{"entity_id": RELAY}]
 
     hass.states.async_set(OFFICE_SENSOR, "19.5")
     await hass.async_block_till_done()
     freezer.tick(timedelta(seconds=35))
     async_fire_time_changed(hass)
     await hass.async_block_till_done()
-    assert hass.states.get(relay).state == "off"
+    assert hass.states.get(RELAY).state == "off"
 
-    # Unavailable: nothing to do, and still no temperatures.
-    hass.states.async_set(relay, "unavailable")
+    hass.states.async_set(RELAY, "unavailable")
     hass.states.async_set(OFFICE_SENSOR, "17.0")
     await hass.async_block_till_done()
     freezer.tick(timedelta(seconds=35))
     async_fire_time_changed(hass)
     await hass.async_block_till_done()
-    assert hass.states.get(THERMOSTAT).attributes["temperature"] == 18.0
+    assert hass.states.get(RELAY).state == "unavailable"
 
-    # Back: on again. Unloading turns it off, as nothing else would.
-    hass.states.async_set(relay, "off")
+    hass.states.async_set(RELAY, "off")
     await hass.async_block_till_done()
     freezer.tick(timedelta(seconds=35))
     async_fire_time_changed(hass)
     await hass.async_block_till_done()
-    assert hass.states.get(relay).state == "on"
+    assert hass.states.get(RELAY).state == "on"
+
+
+async def test_a_reload_keeps_calling_for_heat(hass: HomeAssistant, house, calls, freezer) -> None:
+    """Saving a setting reloads Hearth: the call for heat carries on, with no
+    wait for the on delay, rather than dropping out."""
+    freezer.move_to(dt_util.as_utc(dt_util.parse_datetime("2026-11-13T07:30:00+00:00")))
+    entry = await _setup(hass, calls, [OFFICE], demand_on_delay=60)
+    freezer.tick(timedelta(seconds=65))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert hass.states.get(RELAY).state == "on"
+    offs = len(calls.of("switch", "turn_off"))
+
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "away_temp": 15})
+    await hass.async_block_till_done()
+    assert hass.states.get(RELAY).state == "on"
+    freezer.tick(timedelta(seconds=40))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert hass.states.get(RELAY).state == "on"
+    assert len(calls.of("switch", "turn_off")) == offs
+
+
+async def test_unloading_turns_the_switch_off_unless_hearth_comes_back(hass: HomeAssistant, house, calls, freezer) -> None:
+    freezer.move_to(dt_util.as_utc(dt_util.parse_datetime("2026-11-13T07:30:00+00:00")))
+    entry = await _setup(hass, calls, [OFFICE])
+    assert hass.states.get(RELAY).state == "on"
     assert await hass.config_entries.async_unload(entry.entry_id)
-    assert hass.states.get(relay).state == "off"
+    assert hass.states.get(RELAY).state == "on"  # a moment to come back
+    freezer.tick(timedelta(seconds=31))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert hass.states.get(RELAY).state == "off"
+
+
+async def test_home_assistant_stopping_turns_the_switch_off(hass: HomeAssistant, house, calls, freezer) -> None:
+    from homeassistant.const import EVENT_HOMEASSISTANT_STOP
+
+    freezer.move_to(dt_util.as_utc(dt_util.parse_datetime("2026-11-13T07:30:00+00:00")))
+    await _setup(hass, calls, [OFFICE])
+    assert hass.states.get(RELAY).state == "on"
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_STOP)
+    await hass.async_block_till_done()
+    assert hass.states.get(RELAY).state == "off"
 
 
 async def test_underfloor_shows_what_was_asked_while_the_stat_catches_up(hass: HomeAssistant, house, calls, freezer) -> None:
@@ -265,3 +290,81 @@ async def test_underfloor_taps_reach_the_stat_as_one_write(hass: HomeAssistant, 
     to_stat = [c for c in calls.of("climate", "set_temperature")[before:] if c["entity_id"] == KITCHEN]
     assert [c["temperature"] for c in to_stat] == [start + 4]
     assert hass.states.get(room).attributes["temperature"] == start + 4
+
+
+async def test_every_room_says_how_long_it_will_take(hass: HomeAssistant, house, calls, freezer) -> None:
+    from custom_components.hearth.preheat import WarmUp
+
+    freezer.move_to(dt_util.as_utc(dt_util.parse_datetime("2026-11-13T07:30:00+00:00")))
+    entry = await _setup(hass, calls, [OFFICE])
+    room = hass.states.get(ROOM)
+    assert room.attributes["status"] == "Heating to 19° · still learning how long it takes"
+    assert room.attributes["minutes_to_target"] is None
+
+    zone = entry.runtime_data.zones["office"]
+    for n in range(2):
+        zone.learn(WarmUp(1.0, 60, dt_util.utcnow() - timedelta(days=n + 1), "seen"))
+    freezer.tick(timedelta(seconds=35))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    room = hass.states.get(ROOM)
+    # 1° to go at 1° an hour.
+    assert room.attributes["status"] == "Heating to 19° · about 1 h"
+    assert room.attributes["minutes_to_target"] == 60
+
+    hass.states.async_set(OFFICE_SENSOR, "19.5")
+    freezer.tick(timedelta(seconds=35))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    room = hass.states.get(ROOM)
+    assert room.attributes["status"] == "Comfortable"
+    assert room.attributes["minutes_to_target"] is None
+
+    await hass.services.async_call("climate", "set_hvac_mode", {"entity_id": ROOM, "hvac_mode": "off"}, blocking=True)
+    assert hass.states.get(ROOM).attributes["status"] == "Off"
+
+
+async def test_an_underfloor_room_warming_up_early_says_so(hass: HomeAssistant, house, calls, freezer) -> None:
+    """The stat's own early start reads the same as a radiator room's."""
+    # Friday 15:00; the stat's level is 19° and the schedule goes to 21° at 16:30.
+    freezer.move_to(dt_util.as_utc(dt_util.parse_datetime("2026-11-13T15:00:00+00:00")))
+    await _setup(hass, calls, [KITCHEN_ZONE])
+    room = "climate.kitchen_2"
+    await hass.services.async_call(
+        "hearth", "set_schedule",
+        {"entity_id": room, "weekdays": [{"time": "06:30", "temp": 21}, {"time": "08:00", "temp": 19}, {"time": "16:30", "temp": 21}],
+         "weekends": [{"time": "07:00", "temp": 21}]},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+    freezer.tick(timedelta(seconds=130))  # past the settle time
+    hass.states.async_set(KITCHEN, "heat", {"temperature": 19.0, "current_temperature": 18.5, "hvac_action": "preheating"})
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    state = hass.states.get(room)
+    assert state.attributes["hvac_action"] == "preheating"
+    assert state.attributes["preheating"] is True
+    assert state.attributes["status"] == "Warming up early · 21° by 16:30"
+    assert state.attributes["reason"] == "Warming up early for 21° by 16:30"
+
+    # It learns from the warm-up, as radiator rooms do.
+    hass.states.async_set(KITCHEN, "heat", {"temperature": 21.0, "current_temperature": 21.0, "hvac_action": "idle"})
+    freezer.tick(timedelta(minutes=50))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert hass.states.get(room).attributes["warm_ups"] == 1
+
+
+async def test_removing_a_room_removes_its_device(hass: HomeAssistant, house, calls, freezer) -> None:
+    from homeassistant.helpers import device_registry as dr
+
+    freezer.move_to(dt_util.as_utc(dt_util.parse_datetime("2026-11-13T12:00:00+00:00")))
+    entry = await _setup(hass, calls, [OFFICE, KITCHEN_ZONE])
+    registry = dr.async_get(hass)
+    office = registry.async_get_device(identifiers={("hearth", f"{entry.entry_id}_office")})
+    assert office is not None
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "zones": [KITCHEN_ZONE]})
+    await hass.async_block_till_done()
+    assert registry.async_get_device(identifiers={("hearth", f"{entry.entry_id}_office")}) is None
+    assert registry.async_get_device(identifiers={("hearth", f"{entry.entry_id}_kitchen")}) is not None
+    assert registry.async_get_device(identifiers={("hearth", entry.entry_id)}) is not None

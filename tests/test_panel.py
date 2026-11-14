@@ -5,7 +5,7 @@ from __future__ import annotations
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
-from .conftest import KITCHEN, KITCHEN_ZONE, THERMOSTAT, OFFICE, OFFICE_TRV, hearth_entry
+from .conftest import KITCHEN, KITCHEN_ZONE, OFFICE, OFFICE_TRV, RELAY, hearth_entry
 
 
 async def _setup(hass: HomeAssistant, calls, zones, **options):
@@ -32,7 +32,8 @@ async def test_info(hass: HomeAssistant, house, calls, hass_ws_client) -> None:
     assert office["trvs"] == [OFFICE_TRV]
     assert office["schedule"]["weekdays"]
     assert info["rooms"][1]["stat"] == KITCHEN
-    assert info["settings"]["boiler"] == THERMOSTAT
+    assert info["settings"]["boiler_switch"] == RELAY
+    assert info["is_admin"]
     assert info["house_mode"] == "select.hearth_house_mode"
     assert info["demand"] == "binary_sensor.hearth_radiators_want_heat"
     assert entry.entry_id == info["entry_id"]
@@ -106,3 +107,28 @@ async def test_house_settings(hass: HomeAssistant, house, calls, hass_ws_client)
     await ws.send_json({"id": 4, "type": "hearth/remove_room", "room_id": "office"})
     assert (await ws.receive_json())["success"]
     await hass.async_block_till_done()
+
+
+async def test_everyone_sees_the_panel_but_only_admins_change_it(
+    hass: HomeAssistant, house, calls, hass_ws_client, hass_read_only_access_token
+) -> None:
+    await _setup(hass, calls, [OFFICE])
+    ws = await hass_ws_client(hass, hass_read_only_access_token)
+    await ws.send_json({"id": 1, "type": "hearth/info"})
+    msg = await ws.receive_json()
+    assert msg["success"], msg
+    assert msg["result"]["is_admin"] is False
+    await ws.send_json({"id": 2, "type": "hearth/save_house", "settings": {"away_temp": 15}})
+    msg = await ws.receive_json()
+    assert not msg["success"] and msg["error"]["code"] == "unauthorized"
+    await ws.send_json({"id": 3, "type": "hearth/remove_room", "room_id": "office"})
+    assert not (await ws.receive_json())["success"]
+
+
+async def test_the_switch_must_be_a_switch(hass: HomeAssistant, house, calls, hass_ws_client) -> None:
+    await _setup(hass, calls, [OFFICE])
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "hearth/save_house", "settings": {"boiler_switch": "climate.nest"}})
+    assert not (await ws.receive_json())["success"]
+    await ws.send_json({"id": 2, "type": "hearth/save_house", "settings": {"boiler_switch": "input_boolean.call_for_heat"}})
+    assert (await ws.receive_json())["success"]

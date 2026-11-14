@@ -1,4 +1,8 @@
-"""The house: zones, Home/Away/Holiday, and the boiler for the radiators."""
+"""The house: zones, Home/Away/Holiday, and the call for heat for the radiators.
+
+Hearth asks the boiler for heat one way only: it turns a switch on while any
+radiator room wants heat, and off when none does.
+"""
 
 from __future__ import annotations
 
@@ -11,7 +15,6 @@ import time as monotonic
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import ATTR_TEMPERATURE
 from homeassistant.core import Context, Event, EventStateChangedData, HomeAssistant, State, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import (
@@ -23,17 +26,14 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .const import (
-    CONF_BOILER,
     CONF_BOILER_SWITCH,
-    CONF_BOILER_OFF,
-    CONF_BOILER_ON,
-    CONF_FALLBACK,
     CONF_OFF_DELAY,
     CONF_ON_DELAY,
     CONF_ZONE_ID,
     CONF_ZONES,
     DEFAULTS,
     DOMAIN,
+    HANDOVER_SECONDS,
     HOUSE_AWAY,
     HOUSE_HOLIDAY,
     HOUSE_HOME,
@@ -67,19 +67,14 @@ class Hearth:
         self.context = Context()
         self._unsubs: list[Callable[[], None]] = []
         self._eval_pending: Callable[[], None] | None = None
-        # Boiler demand, debounced.
+        # The call for heat, debounced.
         self.demand = False
         self._raw_demand = False
         self._raw_since = monotonic.monotonic()
-        self._boiler_sent: tuple[float, float] | None = None
         self._switch_sent: tuple[bool, float] | None = None
         self.last_boiler_command: str | None = None
         self._seeding: asyncio.Task | None = None
         self.seed_status = "not needed"
-
-    @property
-    def boiler(self) -> str | None:
-        return self.settings.get(CONF_BOILER) or None
 
     @property
     def boiler_switch(self) -> str | None:
@@ -95,6 +90,13 @@ class Hearth:
 
     # --- lifecycle --------------------------------------------------------
     async def async_start(self) -> None:
+        # Hearth reloading: carry on from the call for heat it left, rather
+        # than dropping it and waiting out the on delay.
+        if cancel := self.hass.data.setdefault(DOMAIN, {}).pop("handover", None):
+            cancel()
+        switch = self.hass.states.get(self.boiler_switch) if self.boiler_switch else None
+        if switch is not None and switch.state == "on":
+            self.demand = self._raw_demand = True
         stored = await self.store.async_load() or {}
         self.house_mode = stored.get("house_mode", HOUSE_HOME)
         if self.house_mode not in HOUSE_MODES:
@@ -107,7 +109,8 @@ class Hearth:
             await zone.async_start()
 
         watched = {e for z in self.zones.values() for e in z.watched_entities()}
-        watched.update(e for e in (self.boiler, self.boiler_switch) if e)
+        if self.boiler_switch:
+            watched.add(self.boiler_switch)
         if watched:
             self._unsubs.append(
                 async_track_state_change_event(self.hass, list(watched), self._state_changed)
@@ -119,8 +122,10 @@ class Hearth:
             self.seed_status = "starting"
             self._seeding = self.hass.async_create_background_task(self._async_seed(), "hearth: learn warm-ups")
 
-    async def async_stop(self) -> None:
-        """Leave the boiler safe: the switch off, or the thermostat at a safe level."""
+    async def async_stop(self, final: bool = True) -> None:
+        """Leave the boiler safe: nothing will turn the switch off once Hearth
+        has gone. When Home Assistant stops, that's straight away; when Hearth
+        only unloads (to reload, say), a little later, unless it's back by then."""
         for unsub in self._unsubs:
             unsub()
         self._unsubs.clear()
@@ -128,13 +133,26 @@ class Hearth:
             self._eval_pending()
         if self._seeding and not self._seeding.done():
             self._seeding.cancel()
-        if not self.radiator_zones:
+        if not self.radiator_zones or not self.boiler_switch:
             return
-        if self.boiler_switch:
-            # Nothing will turn it off once Hearth has gone.
+        if final:
             await self._send_switch(False, force=True)
-        elif self.boiler:
-            await self._send_boiler(float(self.settings[CONF_FALLBACK]), force=True)
+            return
+        switch = self.boiler_switch
+
+        async def _off(_now: datetime) -> None:
+            self.hass.data.get(DOMAIN, {}).pop("handover", None)
+            state = self.hass.states.get(switch)
+            if state is not None and state.state == "on":
+                _LOGGER.info("Hearth didn't come back: turning %s off", switch)
+                await self.hass.services.async_call(
+                    switch.split(".")[0], "turn_off", {"entity_id": switch}, blocking=True, context=self.context
+                )
+
+        data = self.hass.data.setdefault(DOMAIN, {})
+        if cancel := data.pop("handover", None):
+            cancel()
+        data["handover"] = async_call_later(self.hass, HANDOVER_SECONDS, _off)
 
     # --- storage ------------------------------------------------------------
     @callback
@@ -189,12 +207,12 @@ class Hearth:
 
     async def _seed(self) -> None:
         rooms = [z for z in self.radiator_zones if z.sensor and not z.state.seeded]
-        firing = [e for e in (self.boiler, self.boiler_switch) if e]
+        firing = [self.boiler_switch] if self.boiler_switch else []
         if not rooms:
             self.seed_status = "no rooms to learn"
             return
         if not firing:
-            self.seed_status = "no boiler thermostat or switch to read"
+            self.seed_status = "no call for heat switch to read"
             return
         if "recorder" not in self.hass.config.components:
             self.seed_status = "the recorder isn't running"
@@ -274,7 +292,7 @@ class Hearth:
         return [z.name for z in self.radiator_zones if z.calling]
 
     async def _update_boiler(self) -> None:
-        if not (self.boiler_switch or self.boiler) or not self.radiator_zones:
+        if not self.boiler_switch or not self.radiator_zones:
             return
         raw = any(z.calling for z in self.radiator_zones)
         clock = monotonic.monotonic()
@@ -285,11 +303,7 @@ class Hearth:
             self.demand = True
         elif not raw and self.demand and held >= float(self.settings[CONF_OFF_DELAY]):
             self.demand = False
-        if self.boiler_switch:
-            await self._send_switch(self.demand)
-        else:
-            temp = float(self.settings[CONF_BOILER_ON] if self.demand else self.settings[CONF_BOILER_OFF])
-            await self._send_boiler(temp)
+        await self._send_switch(self.demand)
 
     async def _send_switch(self, on: bool, force: bool = False) -> None:
         """Call for heat by turning the switch on, or stop by turning it off."""
@@ -310,37 +324,10 @@ class Hearth:
         except Exception as err:  # noqa: BLE001
             _LOGGER.warning("Couldn't turn %s %s: %s", self.boiler_switch, "on" if on else "off", err)
 
-    async def _send_boiler(self, temp: float, force: bool = False) -> None:
-        state = self.hass.states.get(self.boiler)
-        if state is None:
-            return
-        current = state.attributes.get(ATTR_TEMPERATURE)
-        eco = state.attributes.get("preset_mode") == "eco"
-        if not force and current == temp and state.state == "heat" and not eco:
-            return
-        if not force and self._boiler_sent and self._boiler_sent[0] == temp and monotonic.monotonic() - self._boiler_sent[1] < 60:
-            return
-        self._boiler_sent = (temp, monotonic.monotonic())
-        self.last_boiler_command = f"{temp:g}° at {dt_util.now().strftime('%H:%M:%S')}"
-        try:
-            if eco:
-                await self.hass.services.async_call(
-                    "climate", "set_preset_mode", {"entity_id": self.boiler, "preset_mode": "none"},
-                    blocking=True, context=self.context,
-                )
-            await self.hass.services.async_call(
-                "climate", "set_temperature",
-                {"entity_id": self.boiler, ATTR_TEMPERATURE: temp, "hvac_mode": "heat"},
-                blocking=True, context=self.context,
-            )
-        except Exception as err:  # noqa: BLE001
-            _LOGGER.warning("Couldn't set the boiler thermostat to %s: %s", temp, err)
-
     def diagnostics(self) -> dict[str, Any]:
         now = dt_util.utcnow()
         return {
             "house_mode": self.house_mode,
-            "boiler": self.boiler,
             "boiler_switch": self.boiler_switch,
             "demand": self.demand,
             "last_boiler_command": self.last_boiler_command,
@@ -360,12 +347,10 @@ class Hearth:
 
 
 def _firing(entity_id: str, state: State) -> bool:
-    """A thermostat that's heating, or a call-for-heat switch that's on.
+    """The call for heat switch was on.
 
     History rows are the recorder's light states: they have the state and
     attributes, not everything a live State has (no domain, for one)."""
-    if entity_id.startswith("climate."):
-        return state.attributes.get("hvac_action") == "heating"
     return state.state == "on"
 
 

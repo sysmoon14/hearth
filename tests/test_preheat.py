@@ -13,7 +13,7 @@ from pytest_homeassistant_custom_component.common import async_fire_time_changed
 from custom_components.hearth import preheat
 from custom_components.hearth.preheat import WarmUp
 
-from .conftest import OFFICE, OFFICE_SENSOR, OFFICE_TRV, THERMOSTAT
+from .conftest import OFFICE, OFFICE_SENSOR, OFFICE_TRV, RELAY
 from .test_zones import ROOM, _setup
 
 T0 = datetime(2026, 11, 10, 6, 0, tzinfo=timezone.utc)
@@ -95,7 +95,9 @@ async def test_a_room_warms_up_early_and_learns_from_it(hass: HomeAssistant, hou
     assert room.attributes["reason"] == "Warming up early for 19° by 07:00"
     assert room.attributes["preheating"] and room.attributes["hvac_action"] == "preheating"
     assert hass.states.get(OFFICE_TRV).attributes["temperature"] == 19
-    assert hass.states.get(THERMOSTAT).attributes["temperature"] == 25.0
+    assert hass.states.get(RELAY).state == "on"
+    assert room.attributes["status"] == "Warming up early · 19° by 07:00"
+    assert room.attributes["minutes_to_target"] == 90
 
     # Halfway there the lead has shrunk, but it keeps going.
     hass.states.async_set(OFFICE_SENSOR, "17.6")
@@ -150,9 +152,8 @@ async def test_a_new_room_learns_from_the_boilers_history(hass: HomeAssistant, h
                                last_changed=when, last_updated=when)
 
     history = {
-        THERMOSTAT: [state(THERMOSTAT, "heat", 0, hvac_action="idle"), state(THERMOSTAT, "heat", 10, hvac_action="heating"),
-                     state(THERMOSTAT, "heat", 100, hvac_action="idle"), state(THERMOSTAT, "heat", 600, hvac_action="heating"),
-                     state(THERMOSTAT, "heat", 660, hvac_action="idle")],
+        RELAY: [state(RELAY, "off", 0), state(RELAY, "on", 10), state(RELAY, "off", 100),
+                state(RELAY, "on", 600), state(RELAY, "off", 660)],
         OFFICE_SENSOR: [state(OFFICE_SENSOR, "16.0", 0), state(OFFICE_SENSOR, "17.0", 40), state(OFFICE_SENSOR, "18.5", 90),
                         state(OFFICE_SENSOR, "18.0", 300), state(OFFICE_SENSOR, "19.0", 640)],
     }

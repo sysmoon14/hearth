@@ -53,6 +53,12 @@ class _HearthClimate(HearthEntity, ClimateEntity):
     _attr_hvac_modes = [HVACMode.AUTO, HVACMode.HEAT, HVACMode.OFF]
     _attr_preset_modes = [PRESET_NONE, PRESET_BOOST]
     _attr_target_temperature_step = TEMP_STEP
+    # The History tab reads temperatures, hvac_action and next_change_at;
+    # the rest is settings that would only fill the recorder.
+    _unrecorded_attributes = frozenset({
+        "schedule", "devices", "room_sensor", "zone_id", "kind", "profile",
+        "warm_up_rate", "warm_ups", "warm_ups_from_history", "preheat_from", "minutes_to_target",
+    })
     _attr_min_temp = MIN_TEMP
     _attr_max_temp = MAX_TEMP
     _attr_supported_features = (

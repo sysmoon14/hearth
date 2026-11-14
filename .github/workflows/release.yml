@@ -1,0 +1,25 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: The tag matches Hearth's version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          manifest=$(python3 -c "import json; print(json.load(open('custom_components/hearth/manifest.json'))['version'])")
+          echo "tag $tag, manifest $manifest"
+          test "$tag" = "$manifest"
+      - name: A beta is a pre-release, and only a beta
+        env:
+          PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          case "${GITHUB_REF_NAME}" in
+            *b*|*rc*) test "$PRERELEASE" = "true" ;;
+            *) test "$PRERELEASE" = "false" ;;
+          esac

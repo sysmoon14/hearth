@@ -18,7 +18,7 @@ from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-THERMOSTAT = "climate.boiler_thermostat"
+RELAY = "switch.boiler_relay"
 OFFICE_TRV = "climate.office_trv"
 OFFICE_SENSOR = "sensor.office_temperature"
 KITCHEN = "climate.kitchen"
@@ -48,7 +48,7 @@ class Calls:
     def patch_climate(self) -> None:
         """Once the real climate and select services exist, send calls for the
         stand-in devices here and the rest (Hearth's own entities) to the real ones."""
-        fakes = {THERMOSTAT, OFFICE_TRV, KITCHEN, "select.office_trv_temperature_sensor_select",
+        fakes = {OFFICE_TRV, KITCHEN, "select.office_trv_temperature_sensor_select",
                  "select.kitchen_active_profile"}
         for domain, services in (
             ("climate", ("set_temperature", "set_preset_mode", "set_hvac_mode")),
@@ -109,6 +109,8 @@ async def calls(hass: HomeAssistant) -> Calls:
     calls.register("number", "set_value", _set_value)
     calls.register("select", "select_option", lambda d: _select_option(hass, d))
     calls.register("homeassistant", "update_entity")
+    calls.register("switch", "turn_on", lambda d: hass.states.async_set(RELAY, "on"))
+    calls.register("switch", "turn_off", lambda d: hass.states.async_set(RELAY, "off"))
     for service in ("create_profile_two", "hold_on", "hold_off", "set_away_mode"):
         calls.register("heatmiserneo", service)
     return calls
@@ -116,9 +118,9 @@ async def calls(hass: HomeAssistant) -> Calls:
 
 @pytest.fixture
 async def house(hass: HomeAssistant) -> None:
-    """A boiler thermostat, one Sonoff valve with its companions, a room sensor, and a Heatmiser stat."""
+    """A call for heat relay, one Sonoff valve with its companions, a room sensor, and a Heatmiser stat."""
     await hass.config.async_set_time_zone("Europe/London")
-    hass.states.async_set(THERMOSTAT, "heat", {"temperature": 18.0, "current_temperature": 21.0, "preset_mode": "none"})
+    hass.states.async_set(RELAY, "off")
     hass.states.async_set(OFFICE_SENSOR, "18.0", {"device_class": "temperature"})
 
     dev_reg, ent_reg = dr.async_get(hass), er.async_get(hass)
@@ -161,7 +163,8 @@ async def house(hass: HomeAssistant) -> None:
 def hearth_entry(hass: HomeAssistant, zones: list[dict], **options: Any) -> MockConfigEntry:
     entry = MockConfigEntry(
         domain="hearth", title="Hearth", data={},
-        options={"boiler": THERMOSTAT, "demand_on_delay": 0, "demand_off_delay": 0, "zones": zones, **options},
+        minor_version=2,
+        options={"boiler_switch": RELAY, "demand_on_delay": 0, "demand_off_delay": 0, "zones": zones, **options},
     )
     entry.add_to_hass(hass)
     return entry
