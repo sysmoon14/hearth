@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.0b2
+
+**Fixes**
+- A + or − on a radiator room no longer stops it warming up early for its next change. Turning a room down at lunchtime used to mean it only started heating for the evening at the evening's start time.
+
 ## 1.0.0b1
 
 The first release candidate for Hearth 1.0.

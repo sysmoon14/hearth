@@ -548,15 +548,18 @@ class RadiatorZone(Zone):
 
     def _warm_early(self, now: datetime, base: float) -> tuple[float, str] | None:
         st = self.state
+        upcoming = self.next_scheduled(now)
+        # A + or - on the card lasts until the next change, so it doesn't
+        # stop the room warming in time for that change. Anything longer does.
+        overridden = st.override_until is not None and now < st.override_until
         if (
             st.mode != MODE_SCHEDULE
             or self.hub.house_mode != HOUSE_HOME
             or self.boost_active(now)
-            or (st.override_until is not None and now < st.override_until)
+            or (overridden and (upcoming is None or st.override_until != upcoming[0]))
         ):
             self._early_for = None
             return None
-        upcoming = self.next_scheduled(now)
         if upcoming is None or upcoming[1] <= base:
             return None
         at, temp = upcoming

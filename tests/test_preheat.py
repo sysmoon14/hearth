@@ -120,6 +120,27 @@ async def test_a_room_warms_up_early_and_learns_from_it(hass: HomeAssistant, hou
     assert room.attributes["reason"].startswith("19° until 10:00")
 
 
+async def test_a_turn_until_the_next_change_still_warms_up_early(hass: HomeAssistant, house, calls, freezer) -> None:
+    # Friday: 16° until 07:00, then 19°. Someone turns it to 17° at 05:00.
+    freezer.move_to(dt_util.as_utc(dt_util.parse_datetime("2026-11-13T05:00:00+00:00")))
+    hass.states.async_set(OFFICE_SENSOR, "16.0")
+    entry = await _setup(hass, calls, [OFFICE])
+    _teach(hass, entry)
+    await hass.services.async_call("climate", "set_temperature", {"entity_id": ROOM, "temperature": 17}, blocking=True)
+    await _tick(hass, freezer, "2026-11-13T05:00:30+00:00")
+    room = hass.states.get(ROOM)
+    assert room.attributes["temperature"] == 17
+    assert room.attributes["override_until"] == "2026-11-13T07:00:00+00:00"
+    assert room.attributes["preheat_from"] == "2026-11-13T05:20:00+00:00"
+
+    # The 17° only lasts until 07:00, so warming for 07:00 still starts on time.
+    await _tick(hass, freezer, "2026-11-13T05:21:00+00:00")
+    room = hass.states.get(ROOM)
+    assert room.attributes["temperature"] == 19 and room.attributes["preheating"]
+    assert room.attributes["reason"] == "Warming up early for 19° by 07:00"
+    assert hass.states.get(OFFICE_TRV).attributes["temperature"] == 19
+
+
 async def test_no_early_start_when_away_or_turned_off(hass: HomeAssistant, house, calls, freezer) -> None:
     freezer.move_to(dt_util.as_utc(dt_util.parse_datetime("2026-11-13T05:30:00+00:00")))
     hass.states.async_set(OFFICE_SENSOR, "16.0")
