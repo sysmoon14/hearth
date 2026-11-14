@@ -17,13 +17,15 @@ sees it.
 | **− and +** | In Schedule mode, a change lasts until the schedule's next change. In Fixed, it changes the fixed temperature. |
 | **Boost** | Warmer for an hour (configurable), then back to what the room was doing. |
 | **The physical control** | Turning a valve by hand counts the same as − or + on the card. |
-| **What it's doing** | Every room says it the same way: "Heating to 21° · about 35 min", "Warming up early · 21° by 07:00", "Comfortable" or "Off". It learns how fast each room warms to say how long it has to go. |
+| **What it's doing** | Every room says it the same way: "Heating to 21° · about 35 min", "Warming up early · 21° by 07:00", "Up to temperature", "Not heating" or "Off". It learns how fast each room warms to say how long it has to go. |
 | **Why** | And why it's aiming there: "19° until 17:00, then 16°", "Away: held at 16°", "21° until 10:30, then 16°" after a tap on + or −. |
 
 The house has one more control, **Home / Away / Holiday**:
 
 - **Away** holds every room no warmer than the away temperature (16° by default).
-- **Holiday** keeps every room above frost level (10°) and puts the neoHub in its own away mode.
+- **Holiday** keeps every room above frost level (10°) and puts the neoHub in its own away mode. Give it a day and time to come back and the house returns to Home by itself; set that a few hours before you're home.
+
+While the house is Away or on Holiday, − and + on a room are switched off (the house's temperature would win anyway). In Away you can still boost a room.
 
 ## Calling for heat
 
@@ -37,7 +39,7 @@ If Hearth stops, it turns the switch off. When it only reloads (after you save a
 - Hearth sets each valve's target and puts the valve in plain heat mode, so the valve's own weekly schedule never runs.
 - It feeds the valve the room's real temperature from a sensor elsewhere in the room, because a valve's own sensor sits on a hot radiator. If that sensor stops reporting for 6 hours (a flat battery), the valve goes back to its own sensor until it reports again, and the room's `room_sensor_stale` attribute is on.
 - It asks for heat with the Call for heat switch while the room is below its target, unless none of its valves is online.
-- It warms up early. Each room learns how fast it warms, then starts early so a warmer schedule change is reached on time, not started then: "Warming up early for 21° by 07:00". It learns from each warm-up it sees and, the first time, from the recorder's history of when the Call for heat switch was on; once a room has seen two warm-ups of its own, only those count. Set how early it may start (up to 3 hours by default, 0 turns it off) in House settings. A room on its valve's own sensor learns from that reading, the one it decides it's warm by, but has no history to start from.
+- It warms up early. Each room learns how fast it warms, then starts early so a warmer schedule change is reached on time, not started then: "Warming up early for 21° by 07:00". It learns from each warm-up it sees and, the first time, from the recorder's history of when the Call for heat switch was on; once a room has seen two warm-ups of its own, only those count. Set how early it may start (up to 3 hours by default, 0 turns it off) in House settings, and turn it off for one room under Change room. A room on its valve's own sensor learns from that reading, the one it decides it's warm by, but has no history to start from.
 - `binary_sensor.hearth_radiators_want_heat` carries the same on/off, with the rooms asking in `rooms_asking`, for anything else that wants to follow it.
 
 **Underfloor rooms (Heatmiser neoStats, through the [heatmiserneo](https://github.com/MindrustUK/Heatmiser-for-home-assistant) integration).** The stat runs the schedule itself.
@@ -101,8 +103,9 @@ title: Upstairs
 - `hearth.set_schedule`: set a room's `weekdays` and `weekends`, each a list like `[{"time": "06:30", "temp": 19}, {"time": "22:30", "temp": 16}]`.
 - `hearth.boost`: boost a room, with optional `minutes` and `temperature`.
 - `hearth.cancel_boost`: end a boost early.
+- `hearth.set_holiday`: put the house on Holiday, with an optional `until` (like `2026-12-28 16:00:00`) when it goes back to Home by itself.
 
 ## When something looks wrong
 
-1. Read the room's line on the card: amber means one of its devices is offline or its sensor has stopped reporting.
+1. Read the room's line on the card: amber means one of its devices is offline, its sensor has stopped reporting, or its schedule hasn't reached its thermostat. A problem that lasts 15 minutes also appears under Settings → Repairs.
 2. If that doesn't explain it, download diagnostics: Settings → Devices & services → Hearth → ⋮ → Download diagnostics. It has every room's settings, schedule, temperature source, devices and the boiler's last command.
