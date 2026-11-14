@@ -247,3 +247,19 @@ async def test_a_warm_up_cut_short_by_the_schedule_still_counts(hass: HomeAssist
     hass.states.async_set(OFFICE_SENSOR, "16.3")
     await _tick(hass, freezer, "2026-11-13T23:00:30+00:00")  # 16° at 23:00
     assert len(zone.state.warmups) == 1
+
+
+async def test_a_room_told_a_warm_up_starts_early_before_it_has_two(hass: HomeAssistant, house, calls, freezer) -> None:
+    freezer.move_to(dt_util.as_utc(dt_util.parse_datetime("2026-11-13T12:00:00+00:00")))
+    entry = await _setup(hass, calls, [OFFICE])
+    zone = entry.runtime_data.zones["office"]
+    zone.state.warmups = []
+    zone.learn(WarmUp(2.4, 120, dt_util.utcnow() - timedelta(hours=5), "seen"))
+    assert zone.warm_rate() is None  # one of its own isn't enough
+    await hass.services.async_call("hearth", "add_warm_up", {"entity_id": "climate.office", "rise": 2.4, "minutes": 128}, blocking=True)
+    state = hass.states.get("climate.office")
+    assert state.attributes["warm_ups"] == 2
+    assert 1.1 < state.attributes["warm_up_rate"] < 1.25
+    # Two of its own later, what it was told no longer counts.
+    zone.learn(WarmUp(3, 60, dt_util.utcnow(), "seen"))
+    assert zone.warm_rate() == preheat.rate([w for w in zone.state.warmups if w.source == "seen"])

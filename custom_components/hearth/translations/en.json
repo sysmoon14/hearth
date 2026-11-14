@@ -112,6 +112,24 @@
           "description": "When the house goes back to Home. Leave empty to stay on Holiday until it's changed."
         }
       }
+    },
+    "add_warm_up": {
+      "name": "Add a warm-up",
+      "description": "Tell a room about a warm-up it didn't time itself: how far it rose and how long that took. It counts towards how fast the room warms until the room has seen two warm-ups of its own.",
+      "fields": {
+        "entity_id": {
+          "name": "Room",
+          "description": "The Hearth room or rooms."
+        },
+        "rise": {
+          "name": "Rise",
+          "description": "How many degrees the room rose."
+        },
+        "minutes": {
+          "name": "Minutes",
+          "description": "How long it took, from asking for heat to getting there."
+        }
+      }
     }
   },
   "issues": {

@@ -52,7 +52,7 @@ class WarmUp:
     rise: float
     minutes: float
     at: datetime
-    source: str  # "seen" or "history"
+    source: str  # "seen", "history", or "told" (hearth.add_warm_up)
 
     @property
     def rate(self) -> float:
@@ -87,7 +87,8 @@ def rate(warmups: list[WarmUp]) -> float | None:
 
     Warm-ups Hearth timed itself are the better measure: the history's are
     whole-house firing periods, read from whatever the sensor recorded then.
-    So the history only counts until the room has seen enough of its own."""
+    So the history, and any it was told, only count until the room has seen
+    enough of its own."""
     seen = [w for w in warmups if w.source == "seen"]
     if len(seen) >= MIN_WARMUPS:
         warmups = seen

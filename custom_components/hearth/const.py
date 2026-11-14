@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 DOMAIN = "hearth"
-VERSION = "1.0.0b4"
+VERSION = "1.0.0b5"
 
 # Zone kinds
 KIND_RADIATOR = "radiator"
@@ -118,7 +118,7 @@ HANDOVER_SECONDS = 30
 
 STORAGE_KEY = "hearth"
 STORAGE_VERSION = 1
-# 2: warm-ups read from the history before 1.0.0b4 are dropped; they were
+# 2: warm-ups read from the history before 1.0.0b5 are dropped; they were
 # measured with sensors that reported once an hour.
 STORAGE_MINOR_VERSION = 2
 
@@ -130,6 +130,7 @@ SERVICE_SET_SCHEDULE = "set_schedule"
 SERVICE_BOOST = "boost"
 SERVICE_CANCEL_BOOST = "cancel_boost"
 SERVICE_SET_HOLIDAY = "set_holiday"
+SERVICE_ADD_WARM_UP = "add_warm_up"
 
 # A problem that lasts this long is raised as a repair in Home Assistant, so
 # it's seen without opening Hearth. Shorter ones are restarts and blips.
