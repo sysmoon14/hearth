@@ -49,6 +49,7 @@ The house has one more control, **Home / Away / Holiday**:
 ## The Hearth panel
 
 - **Rooms:** Home / Away / Holiday, what the boiler and the underfloor are doing, what happens if Hearth stops, a card per room with its "why" line, and every room's day on one strip. Open a room for its controls, today's temperature against its target, and its devices.
+- **History:** every room's last 24 hours, 3 days or 7 days from the recorder: its temperature against its target, and a strip showing when it was heating, warming up early or off. Above them, how long the boiler was asked for the radiators, how long rooms spent warming up early, and how many warmer schedule changes were reached on time. Hover or touch a graph for the reading at that moment.
 - **Schedules:** one editor for every room: weekdays and weekends, up to six changes a day, copy to the other days or to other rooms.
 - **House:** the Call for heat switch or boiler thermostat, delays, Away / Holiday / Boost temperatures, and the rooms with their devices. Add a room walks you through its valves or stat and where its temperature comes from.
 

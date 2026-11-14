@@ -4,7 +4,7 @@
 // commands (panel.py); schedules, modes, boosts and Home/Away/Holiday through
 // Hearth's own actions and entities, the same ones the cards use.
 
-const VERSION = "0.4.4";
+const VERSION = "0.4.5";
 const MAX_CHANGES = 6;
 const DAYS = [["weekdays", "Weekdays · Mon–Fri"], ["weekends", "Weekends · Sat–Sun"]];
 const HOUSE = [["home", "Home"], ["away", "Away"], ["holiday", "Holiday"]];
@@ -33,6 +33,9 @@ class HearthPanel extends HTMLElement {
     this._dialog = null; // add / edit a room
     this._house = null; // the House tab's unsaved settings
     this._history = {};
+    this._hist = null; // the History tab's readings, for one range
+    this._histRange = 24;
+    this._histLoading = false;
     this._busy = false;
     this._error = "";
     this._toast = "";
@@ -211,6 +214,7 @@ class HearthPanel extends HTMLElement {
     if (this._room && this._roomById(this._room)) body = this._roomPage(this._roomById(this._room));
     else if (this._tab === "schedules") body = this._schedulesTab();
     else if (this._tab === "house") body = this._houseTab();
+    else if (this._tab === "history") body = this._historyTab();
     else body = this._roomsTab();
     root.innerHTML = `<style>${STYLE}</style><div class="page">${this._header()}<div class="content">${
       this._info.loaded ? "" : `<div class="wrap"><div class="card warn">Hearth isn't running. Check Settings → Devices & services.</div></div>`}${body}</div>${
@@ -219,6 +223,7 @@ class HearthPanel extends HTMLElement {
     if (content) content.scrollTop = scroll;
     this._wirePickers();
     if (this._room) this._drawHistory(this._roomById(this._room));
+    else if (this._tab === "history") this._wireHistory();
   }
 
   _header() {
@@ -237,7 +242,7 @@ class HearthPanel extends HTMLElement {
       }
     }
     const mode = this._state(this._info.house_mode)?.state;
-    const tabs = [["rooms", "Rooms"], ["schedules", "Schedules"], ["house", "House"]];
+    const tabs = [["rooms", "Rooms"], ["history", "History"], ["schedules", "Schedules"], ["house", "House"]];
     return `<header class="bar">${menu}
         <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="var(--hp-heat)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${ICON_FLAME}"/></svg>
         <h1>Heating</h1><span class="grow"></span>
@@ -484,6 +489,235 @@ class HearthPanel extends HTMLElement {
       ${bars.map(([a, b]) => `<rect x="${x(a)}" y="${B + 12}" width="${Math.max(2, x(b) - x(a))}" height="6" rx="3" fill="var(--hp-heat)"/>`).join("")}
       ${last ? `<circle cx="${x(now)}" cy="${y(last.room)}" r="6" fill="var(--primary-color)"/>` : ""}
     </svg>`;
+  }
+
+  // History -------------------------------------------------------------------
+  // Every room over the last day (or 3 or 7), from the recorder: its
+  // temperature, its target, and when it was heating, warming up early or off.
+  _historyTab() {
+    const rooms = this._info.rooms;
+    if (!rooms.length) return this._roomsTab();
+    const hours = this._histRange;
+    const h = this._hist;
+    if (!(h && h.hours === hours && Date.now() - h.at < 300000) && !this._histLoading) this._loadHistory(hours);
+    const ranges = [[24, "24 hours"], [72, "3 days"], [168, "7 days"]];
+    const when = (t) => `${new Date(t).toLocaleDateString(undefined, hours > 24 ? { weekday: "short", day: "numeric", month: "short" } : { weekday: "long" })} ${new Date(t).toTimeString().slice(0, 5)}`;
+    const ready = h && h.hours === hours && !h.error;
+    const head = `<div class="row between flexwrap" style="gap:16px">
+        <div class="stack tight"><h2 class="htitle">Last ${ranges.find(([k]) => k === hours)[1]}</h2>
+          <span class="muted small">${ready ? `${esc(when(h.start))} to ${esc(when(h.end))} · from Home Assistant's recorder` : "From Home Assistant's recorder"}</span></div>
+        <div class="seg" role="group" aria-label="Time range">${ranges.map(([k, label]) =>
+          `<button data-act="hist-range" data-hours="${k}" class="${hours === k ? "on" : ""}" aria-pressed="${hours === k}">${label}</button>`).join("")}</div>
+      </div>`;
+    if (!h || h.hours !== hours) return `<div class="wrap">${head}<div class="card muted">Loading every room's readings…</div></div>`;
+    if (h.error) return `<div class="wrap">${head}<div class="card error">The readings couldn't be loaded: ${esc(h.error)}</div></div>`;
+
+    const dur = (ms) => { const m = Math.round(ms / 60000); const hh = Math.floor(m / 60), mm = m % 60; return hh ? (mm ? `${hh} h ${mm} min` : `${hh} h`) : `${mm} min`; };
+    const rads = h.rooms.filter((r) => r.room.kind === "radiator");
+    const early = h.rooms.filter((r) => r.pre > 0);
+    const totals = [];
+    if (rads.length) totals.push(["Boiler asked for radiators", dur(h.boiler), "Any radiator room heating or warming up early"]);
+    totals.push(["Warming up early", dur(early.reduce((n, r) => n + r.pre, 0)), early.length ? early.map((r) => r.room.name).join(", ") : "No room needed to"]);
+    totals.push(["On time", h.changes ? `${h.reached} of ${h.changes}` : "–", h.changes ? "Warmer schedule changes the room had reached by their time" : "No warmer schedule changes in this time"]);
+
+    const { lo, hi } = h.scale;
+    const ticks = h.ticks.map((t) => `<span style="left:${t.pct.toFixed(2)}%" class="${t.day ? "day" : ""}">${esc(t.label)}</span>`).join("") + `<span style="left:100%" class="nowtick">now</span>`;
+    const grid = h.ticks.map((t) => `M${(t.pct * 10).toFixed(1)} 0V150`).join("");
+    const segs = (r, cls) => r.segs.map((s) => `<div class="${cls} s-${s.state}" style="width:${s.pct.toFixed(3)}%"></div>`).join("");
+    const card = (r, i) => {
+      const room = r.room;
+      const heated = r.alwaysOff ? "Off the whole time" : r.heat + r.pre ? `Heated ${dur(r.heat + r.pre)}` : "Didn't need heat";
+      const earlyLine = room.kind !== "radiator" ? "Early starts are the stat's own" : r.pre ? `of which ${dur(r.pre)} warming up early` : "No early start";
+      const nowTop = r.now === null ? null : ((hi - r.now) / (hi - lo)) * 100;
+      return `<article class="card hroom">
+        <div class="hinfo">
+          <button class="hname" data-act="room" data-id="${esc(room.id)}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="${room.kind === "radiator" ? ICON_RAD : ICON_UFH}"/></svg>${esc(room.name)}</button>
+          <div class="temps"><span class="hnow">${deg(r.now)}</span><span class="muted small">now</span></div>
+          <span class="small ${r.heat + r.pre ? "hhot" : "muted"}">${esc(heated)}</span>
+          ${r.alwaysOff ? "" : `<span class="muted small">${esc(earlyLine)}</span>`}
+          ${r.lo === null ? "" : `<span class="muted small">Low ${deg(r.lo)} · high ${deg(r.hi)}</span>`}
+          <span class="muted tiny">${room.kind === "radiator" ? "Radiator" : "Underfloor"}</span>
+        </div>
+        <div class="hplot">
+          <div class="haxis" aria-hidden="true"><span>${hi}°</span><span>${Math.round((hi + lo) / 2)}°</span><span>${lo}°</span></div>
+          <div class="hcol">
+            <div class="hchart" data-hist="${i}">
+              <div class="hwash" aria-hidden="true">${segs(r, "w")}</div>
+              <svg viewBox="0 0 1000 150" preserveAspectRatio="none" role="img" aria-label="${esc(`${room.name}: ${heated.toLowerCase()}${r.lo === null ? "" : `, between ${deg(r.lo)} and ${deg(r.hi)}`}`)}">
+                <path d="${grid}" class="hgrid"/><path d="M0 0H1000M0 75H1000M0 150H1000" class="hgrid"/>
+                <path d="${r.targetPath}" class="htarget"/><path d="${r.roomPath}" class="hline"/>
+              </svg>
+              ${nowTop === null ? "" : `<i class="hdot" style="top:${nowTop.toFixed(2)}%"></i>`}
+              <i class="hcursor" hidden></i><div class="htip" hidden></div>
+            </div>
+            <div class="hband" aria-hidden="true">${segs(r, "b")}</div>
+            <div class="hticks" aria-hidden="true">${ticks}</div>
+          </div>
+        </div>
+      </article>`;
+    };
+    return `<div class="wrap">${head}
+      <section class="status">${totals.map(([cap, big, sub]) => `<div class="card status-card"><span class="caps">${esc(cap)}</span><span class="hbig">${esc(big)}</span><span class="muted small">${esc(sub)}</span></div>`).join("")}</section>
+      <div class="hkey small">
+        <span><svg width="26" height="10" aria-hidden="true"><line x1="1" y1="5" x2="25" y2="5" class="hline"/></svg>Room temperature</span>
+        <span><svg width="26" height="10" aria-hidden="true"><line x1="1" y1="5" x2="25" y2="5" class="htarget"/></svg>Target</span>
+        <span><i class="b s-heat"></i>Heating</span><span><i class="b s-pre"></i>Warming up early</span>
+        <span><i class="b s-off"></i>Off</span><span><i class="b s-idle"></i>Not asking</span>
+      </div>
+      <section class="stack">${h.rooms.map(card).join("")}</section>
+      <p class="muted small">Hover or touch a graph for the time, temperature, target and what the room was doing. Underfloor stats warm up early by themselves, which shows here as heating.</p>
+    </div>`;
+  }
+
+  async _loadHistory(hours) {
+    this._histLoading = true;
+    const end = Date.now();
+    const start = end - hours * 3600000;
+    const rooms = this._info.rooms;
+    try {
+      const res = await this._hass.callWS({
+        type: "history/history_during_period", start_time: new Date(start).toISOString(), end_time: new Date(end).toISOString(),
+        entity_ids: rooms.map((r) => r.entity_id).filter(Boolean),
+        minimal_response: false, no_attributes: false, significant_changes_only: false,
+      });
+      this._hist = this._histData(hours, start, end, rooms.map((r) => this._roomHistory(r, res[r.entity_id] || [], start, end)));
+    } catch (err) {
+      this._hist = { hours, at: Date.now(), error: err?.message || String(err) };
+    }
+    this._histLoading = false;
+    if (this._tab !== "history" || this._room) return;
+    if (this._typing() || this._dialog || this._pressing) this._pending = true;
+    else this._render();
+  }
+
+  // One room's readings as points, each lasting until the next.
+  _roomHistory(room, rows, start, end) {
+    let attrs = {};
+    let state = null;
+    const pts = [];
+    for (const row of rows) {
+      if (row.s !== undefined) state = row.s;
+      attrs = { ...attrs, ...(row.a || {}) };
+      const gone = !state || state === "unavailable" || state === "unknown";
+      const act = attrs.hvac_action;
+      pts.push({
+        t: Math.max(start, (row.lu ?? row.lc) * 1000),
+        room: gone ? null : num(attrs.current_temperature),
+        target: gone || state === "off" ? null : num(attrs.temperature),
+        state: gone ? "gap" : act === "preheating" ? "pre" : act === "heating" ? "heat" : state === "off" || act === "off" ? "off" : "idle",
+        nextAt: attrs.next_change_at ? Date.parse(attrs.next_change_at) : null,
+      });
+    }
+    const segs = [];
+    let heat = 0, pre = 0, reached = 0, changes = 0;
+    const busy = [];
+    pts.forEach((p, i) => {
+      const until = i + 1 < pts.length ? pts[i + 1].t : end;
+      if (until <= p.t) return;
+      const last = segs[segs.length - 1];
+      if (last && last.state === p.state && last.until === p.t) last.until = until;
+      else segs.push({ state: p.state, from: p.t, until });
+      if (p.state === "heat") heat += until - p.t;
+      if (p.state === "pre") pre += until - p.t;
+      if (p.state === "heat" || p.state === "pre") busy.push([p.t, until]);
+      // A warmer schedule change: was the room already there when it came?
+      const prev = pts[i - 1];
+      if (prev && prev.target !== null && p.target !== null && p.target > prev.target
+          && prev.nextAt && Math.abs(p.t - prev.nextAt) < 600000) {
+        changes++;
+        if (p.room !== null && p.room >= p.target - 0.3) reached++;
+      }
+    });
+    const temps = pts.map((p) => p.room).filter((v) => v !== null);
+    const now = [...pts].reverse().find((p) => p.room !== null)?.room ?? null;
+    return {
+      room, pts, segs, heat, pre, reached, changes, busy, now,
+      lo: temps.length ? Math.min(...temps) : null, hi: temps.length ? Math.max(...temps) : null,
+      targets: pts.map((p) => p.target).filter((v) => v !== null),
+      alwaysOff: segs.length > 0 && segs.every((s) => s.state === "off" || s.state === "gap"),
+    };
+  }
+
+  // Shared scale, ticks, paths and the house totals.
+  _histData(hours, start, end, rooms) {
+    const vals = rooms.flatMap((r) => [r.lo, r.hi, ...r.targets]).filter((v) => v !== null);
+    let lo = vals.length ? Math.floor(Math.min(...vals) - 0.5) : 14;
+    let hi = vals.length ? Math.ceil(Math.max(...vals) + 0.5) : 22;
+    if (hi - lo < 6) { const mid = (hi + lo) / 2; lo = Math.floor(mid - 3); hi = lo + 6; }
+    if ((hi - lo) % 2) hi += 1;
+    const span = end - start;
+    const x = (t) => (((t - start) / span) * 1000).toFixed(1);
+    const y = (v) => (((hi - v) / (hi - lo)) * 150).toFixed(1);
+    for (const r of rooms) {
+      let d = "", t = "", prevT = null;
+      let open = false;
+      for (const p of r.pts) {
+        if (p.room === null) open = false;
+        else { d += `${open ? "L" : "M"}${x(p.t)} ${y(p.room)}`; open = true; }
+        if (p.target === null) prevT = null;
+        else { t += prevT === null ? `M${x(p.t)} ${y(p.target)}` : `H${x(p.t)}V${y(p.target)}`; prevT = p.target; }
+      }
+      if (open && r.now !== null) d += `H1000`;
+      if (prevT !== null) t += `H1000`;
+      r.roomPath = d;
+      r.targetPath = t;
+      for (const s of r.segs) s.pct = ((s.until - s.from) / span) * 100;
+      const first = r.segs[0];
+      if (first && first.from > start) r.segs.unshift({ state: "gap", from: start, until: first.from, pct: ((first.from - start) / span) * 100 });
+    }
+    // The boiler: any radiator room heating or warming up, merged.
+    const busy = rooms.filter((r) => r.room.kind === "radiator").flatMap((r) => r.busy).sort((a, b) => a[0] - b[0]);
+    let boiler = 0, cur = null;
+    for (const [a, b] of busy) {
+      if (cur && a <= cur[1]) cur[1] = Math.max(cur[1], b);
+      else { if (cur) boiler += cur[1] - cur[0]; cur = [a, b]; }
+    }
+    if (cur) boiler += cur[1] - cur[0];
+    // Ticks on whole hours: every 3 for a day, 12 for 3 days, midnights for a week.
+    const every = hours <= 24 ? 3 : hours <= 72 ? 12 : 24;
+    const ticks = [];
+    const d = new Date(start); d.setMinutes(0, 0, 0);
+    while (d.getTime() <= start || d.getHours() % every) d.setHours(d.getHours() + 1);
+    for (; d.getTime() < end - span * 0.03; d.setHours(d.getHours() + every)) {
+      const day = d.getHours() === 0;
+      ticks.push({ pct: ((d.getTime() - start) / span) * 100, day,
+        label: day ? d.toLocaleDateString(undefined, { weekday: "short" }) : `${String(d.getHours()).padStart(2, "0")}:00` });
+    }
+    return {
+      hours, at: Date.now(), start, end, rooms, ticks, boiler, scale: { lo, hi },
+      reached: rooms.reduce((n, r) => n + r.reached, 0), changes: rooms.reduce((n, r) => n + r.changes, 0),
+    };
+  }
+
+  // The readout under a finger or pointer.
+  _wireHistory() {
+    const h = this._hist;
+    if (!h || h.error) return;
+    const words = { heat: "Heating", pre: "Warming up early", off: "Off", idle: "Not asking for heat", gap: "No readings" };
+    for (const el of this.shadowRoot.querySelectorAll(".hchart")) {
+      const r = h.rooms[Number(el.dataset.hist)];
+      const cursor = el.querySelector(".hcursor");
+      const tip = el.querySelector(".htip");
+      const show = (e) => {
+        const box = el.getBoundingClientRect();
+        const f = Math.min(1, Math.max(0, (e.clientX - box.left) / box.width));
+        const t = h.start + f * (h.end - h.start);
+        let p = null;
+        for (const q of r.pts) { if (q.t <= t) p = q; else break; }
+        const when = `${h.hours > 24 ? `${new Date(t).toLocaleDateString(undefined, { weekday: "short" })} ` : ""}${new Date(t).toTimeString().slice(0, 5)}`;
+        const temps = p && p.room !== null ? `${deg(p.room)}${p.target !== null ? ` → ${deg(p.target)}` : ""}` : "";
+        tip.innerHTML = `<b>${esc(when)}</b>${temps ? ` · ${esc(temps)}` : ""}<br><span class="${p && (p.state === "heat" || p.state === "pre") ? "hhot" : "muted"}">${esc(words[p?.state || "gap"])}</span>`;
+        cursor.style.left = `${(f * 100).toFixed(2)}%`;
+        tip.style.left = `${(f * 100).toFixed(2)}%`;
+        tip.style.transform = `translateX(${f > 0.7 ? "-100%" : f < 0.3 ? "0" : "-50%"})`;
+        cursor.hidden = false;
+        tip.hidden = false;
+      };
+      const hide = () => { cursor.hidden = true; tip.hidden = true; };
+      el.addEventListener("pointermove", show);
+      el.addEventListener("pointerdown", show);
+      el.addEventListener("pointerleave", hide);
+    }
   }
 
   // Schedules -------------------------------------------------------------------
@@ -790,6 +1024,7 @@ class HearthPanel extends HTMLElement {
       case "remove": this._removeRoom(room); return;
       case "house-save": this._saveHouse(); return;
       case "house-discard": this._house = null; this._render(); return;
+      case "hist-range": this._histRange = Number(el.dataset.hours); this._render(); return;
       default: break;
     }
     if (act.startsWith("sched-")) this._schedAct(act, el);
@@ -1056,6 +1291,47 @@ p{margin:0;line-height:1.45}
 .target{text-align:center;min-width:96px}
 .tbig{font-size:40px;font-weight:300}
 .tval{min-width:60px;text-align:center;font-size:22px;font-weight:300}
+.htitle{font-size:20px;font-weight:400}
+.hbig{font-size:28px;font-weight:300}
+.hkey{display:flex;flex-wrap:wrap;align-items:center;gap:8px 22px;color:var(--secondary-text-color)}
+.hkey span{display:inline-flex;align-items:center;gap:8px}
+.hkey .b{width:22px;height:12px;border-radius:3px;border:1px solid var(--hp-line)}
+.hroom{display:flex;flex-wrap:wrap;gap:18px;padding:16px 18px}
+.hinfo{flex:1 1 190px;max-width:230px;display:flex;flex-direction:column;gap:6px;min-width:0}
+.hname{display:flex;align-items:center;gap:8px;min-height:32px;padding:0;border:0;background:none;color:var(--primary-text-color);font:inherit;font-size:16px;font-weight:500;cursor:pointer;text-align:left}
+.hname:hover{color:var(--primary-color)}
+.hname svg{color:var(--secondary-text-color);flex:none}
+.hnow{font-size:30px;font-weight:300;letter-spacing:-1px}
+.hhot{color:var(--hp-heat)}
+.tiny{font-size:12px}
+.hplot{flex:999 1 520px;min-width:0;display:flex;gap:8px}
+.haxis{width:30px;flex:none;height:150px;display:flex;flex-direction:column;justify-content:space-between;font-size:11px;color:var(--secondary-text-color);text-align:right;margin-top:-6px;padding-bottom:0}
+.haxis span{line-height:12px}
+.hcol{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:6px}
+.hchart{position:relative;height:150px;touch-action:pan-y;cursor:crosshair}
+.hchart svg{position:absolute;inset:0;width:100%;height:100%;display:block;overflow:visible}
+.hwash,.hband{display:flex}
+.hwash{position:absolute;inset:0}
+.hband{height:14px;border-radius:4px;overflow:hidden;background:rgba(127,127,127,.12)}
+.hband .b{border-right:1px solid var(--hp-card)}
+.hgrid{fill:none;stroke:var(--hp-line);stroke-width:1;vector-effect:non-scaling-stroke}
+.hline{fill:none;stroke:var(--primary-color);stroke-width:2.5;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke}
+.htarget{fill:none;stroke:var(--secondary-text-color);stroke-width:2;stroke-dasharray:3 4;vector-effect:non-scaling-stroke}
+.b.s-heat{background:var(--hp-heat)}
+.b.s-pre{background:repeating-linear-gradient(135deg,color-mix(in srgb,var(--hp-heat) 60%,#fff) 0 3px,color-mix(in srgb,var(--hp-heat) 40%,#000) 3px 6px)}
+.b.s-off{background:var(--hp-off)}
+.b.s-idle,.b.s-gap{background:transparent}
+.w.s-heat{background:color-mix(in srgb,var(--hp-heat) 11%,transparent)}
+.w.s-pre{background:color-mix(in srgb,var(--hp-heat) 7%,transparent)}
+.w.s-off{background:rgba(127,127,127,.07)}
+.hdot{position:absolute;right:-4px;width:9px;height:9px;border-radius:5px;background:var(--primary-color);transform:translateY(-50%);pointer-events:none}
+.hcursor{position:absolute;top:0;bottom:0;width:1px;background:var(--primary-text-color);opacity:.6;pointer-events:none}
+.htip{position:absolute;top:-6px;padding:6px 10px;border-radius:8px;background:var(--hp-card);border:1px solid var(--hp-line);box-shadow:0 2px 8px rgba(0,0,0,.3);font-size:12px;line-height:1.5;white-space:nowrap;pointer-events:none;z-index:1}
+.htip[hidden],.hcursor[hidden]{display:none}
+.hticks{position:relative;height:16px;font-size:11px;color:var(--secondary-text-color)}
+.hticks span{position:absolute;transform:translateX(-50%);white-space:nowrap}
+.hticks .day{color:var(--primary-text-color)}
+.hticks .nowtick{transform:translateX(-100%);color:var(--primary-color)}
 .kv{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 0;border-top:1px solid var(--hp-line);font-size:14px}
 .kv label,.kv>span:first-child{flex:1 1 auto}
 .sub{display:block;font-size:12px;color:var(--secondary-text-color);margin-top:2px;line-height:1.4}
