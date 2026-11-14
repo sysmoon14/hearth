@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.0b3
+
+**Calling for heat**
+- A radiator room stops asking for heat when it reaches its target, not 0.2° above it. The valves shut at the target, so the boiler was firing into closed radiators.
+- A room whose valves have all been shut for 5 minutes stops asking, once it's within 0.3° of its target.
+
+**Underfloor**
+- Turning a stat off (standby) at the stat or in the Heatmiser app shows the room as Off straight away ("Off: turned off on the thermostat"), instead of as a change to 12° on its schedule. Turning it back on at the stat puts the room back on its schedule.
+
 ## 1.0.0b2
 
 **Fixes**
