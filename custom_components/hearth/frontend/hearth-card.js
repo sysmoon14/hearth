@@ -10,8 +10,8 @@
  */
 
 import {
-  VERSION, TICKS, STRIP_STYLE, boostLabel, clamp, deg, esc, heating, nowPct, reasonOf, statusOf, stripHtml, targetLabel, todayBlocks,
-} from "./hearth-common.js?v=1.0.0b3";
+  VERSION, TICKS, STRIP_STYLE, boostLabel, clamp, deg, esc, heating, isOff, nowPct, problemOf, reasonOf, statusOf, stripHtml, targetLabel, todayBlocks,
+} from "./hearth-common.js?v=1.0.0b4";
 
 const MODES = [["auto", "Schedule"], ["heat", "Fixed"], ["off", "Off"]];
 const HOUSE = [["home", "Home"], ["away", "Away"], ["holiday", "Holiday"]];
@@ -42,6 +42,8 @@ const STYLE = `
   .name { font-weight: 500; color: var(--primary-text-color); }
   .why { font-size: .82rem; color: var(--secondary-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .why.hot { color: var(--state-climate-heat-color, #ff8100); }
+  .why.warn { color: var(--warning-color, #ffa600); white-space: normal; }
+  .round:disabled { opacity: .35; cursor: default; }
   .temps { text-align: right; }
   .now { font-size: 1.35rem; font-weight: 500; color: var(--primary-text-color); line-height: 1.1; }
   .aim { font-size: .8rem; color: var(--secondary-text-color); }
@@ -83,7 +85,7 @@ class HearthCard extends HTMLElement {
     this._sig = "";
     this.shadowRoot.addEventListener("click", (ev) => {
       const el = ev.target.closest("[data-action]");
-      if (el) { ev.stopPropagation(); this._act(el); }
+      if (el && !el.disabled) { ev.stopPropagation(); this._act(el); }
     });
   }
 
@@ -194,7 +196,7 @@ class HearthCard extends HTMLElement {
     const single = !!this._config.entity;
     const houseRow = !single && this._config.show_house && house && this._hass.states[house]
       ? `<div class="house"><div class="title">${esc(this._config.title || "Heating")}</div>${this._seg(HOUSE, this._hass.states[house].state, "house", "")}</div>`
-      : "";
+      : !single && this._config.title ? `<div class="house"><div class="title">${esc(this._config.title)}</div></div>` : "";
     this.shadowRoot.innerHTML = `<style>${STYLE}</style>
       <ha-card class="${single ? "single" : ""}">${houseRow}
         ${rooms.map((id) => this._room(id)).join("") || `<div class="empty">No Hearth rooms yet. Add them from Hearth in the sidebar.</div>`}
@@ -218,20 +220,22 @@ class HearthCard extends HTMLElement {
     const icon = a.kind === "underfloor" ? "mdi:heating-coil" : "mdi:radiator";
     const boosting = a.preset_mode === "boost";
     // While it heats, say how long; otherwise, what it's doing and why.
-    const line = pending !== undefined ? `Setting ${deg(pending)}…` : hot || s.state === "off" ? statusOf(s) : a.reason || statusOf(s);
+    const problem = problemOf(s);
+    const off = isOff(s);
+    const line = pending !== undefined ? `Setting ${deg(pending)}…` : problem || (hot || s.state === "off" ? statusOf(s) : a.reason || statusOf(s));
     const row = `<div class="row" data-action="toggle" data-id="${esc(id)}" role="button" aria-expanded="${open}">
         <div class="icon ${hot ? "heating" : ""} ${s.state === "off" ? "off" : ""}"><ha-icon icon="${hot ? "mdi:fire" : icon}"></ha-icon></div>
-        <div class="names"><div class="name">${esc(a.friendly_name || id)}</div><div class="why ${hot ? "hot" : ""}">${esc(line)}</div></div>
-        <div class="temps"><div class="now">${deg(a.current_temperature)}</div><div class="aim">→ ${deg(target)}</div></div>
+        <div class="names"><div class="name">${esc(a.friendly_name || id)}</div><div class="why ${problem && pending === undefined ? "warn" : hot ? "hot" : ""}">${esc(line)}</div></div>
+        <div class="temps"><div class="now">${deg(a.current_temperature)}</div><div class="aim">${off ? "off" : `→ ${deg(target)}`}</div></div>
       </div>`;
     if (!open) return `<div class="room">${row}</div>`;
     const house = this._hass.states[this._houseEntity()];
     const controls = `<div class="controls">
-        ${hot && reasonOf(s) ? `<div class="reason">${esc(reasonOf(s))}</div>` : ""}
+        ${(hot || problem) && reasonOf(s) ? `<div class="reason">${esc(reasonOf(s))}</div>` : ""}
         <div class="dial">
-          <button class="round" data-action="minus" data-id="${esc(id)}" aria-label="Cooler">−</button>
-          <div class="target"><div class="big">${deg(target)}</div><div class="label">${esc(targetLabel(s))}</div></div>
-          <button class="round" data-action="plus" data-id="${esc(id)}" aria-label="Warmer">+</button>
+          <button class="round" data-action="minus" data-id="${esc(id)}" aria-label="Cooler" ${off ? "disabled" : ""}>−</button>
+          <div class="target"><div class="big">${off ? "Off" : deg(target)}</div><div class="label">${esc(off ? `kept above ${deg(a.temperature)}` : targetLabel(s))}</div></div>
+          <button class="round" data-action="plus" data-id="${esc(id)}" aria-label="Warmer" ${off ? "disabled" : ""}>+</button>
         </div>
         ${this._seg(MODES, s.state, "mode", id, true)}
         ${a.schedule ? `<div>${stripHtml(todayBlocks(s), { now: nowPct() })}${TICKS}</div>` : ""}

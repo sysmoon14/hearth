@@ -35,17 +35,17 @@ If Hearth stops, it turns the switch off. When it only reloads (after you save a
 
 **Radiator rooms (Sonoff TRVZB and other Zigbee2MQTT valves).** Home Assistant runs the schedule.
 - Hearth sets each valve's target and puts the valve in plain heat mode, so the valve's own weekly schedule never runs.
-- It feeds the valve the room's real temperature from a sensor elsewhere in the room, because a valve's own sensor sits on a hot radiator.
-- It asks for heat with the Call for heat switch while the room is below its target.
-- It warms up early. Each room learns how fast it warms, then starts early so a warmer schedule change is reached on time, not started then: "Warming up early for 21° by 07:00". It learns from each warm-up it sees and, the first time, from the recorder's history of when the Call for heat switch was on. Set how early it may start (up to 3 hours by default, 0 turns it off) in House settings. A room on its valve's own sensor learns from that reading, the one it decides it's warm by, but has no history to start from.
+- It feeds the valve the room's real temperature from a sensor elsewhere in the room, because a valve's own sensor sits on a hot radiator. If that sensor stops reporting for 6 hours (a flat battery), the valve goes back to its own sensor until it reports again, and the room's `room_sensor_stale` attribute is on.
+- It asks for heat with the Call for heat switch while the room is below its target, unless none of its valves is online.
+- It warms up early. Each room learns how fast it warms, then starts early so a warmer schedule change is reached on time, not started then: "Warming up early for 21° by 07:00". It learns from each warm-up it sees and, the first time, from the recorder's history of when the Call for heat switch was on; once a room has seen two warm-ups of its own, only those count. Set how early it may start (up to 3 hours by default, 0 turns it off) in House settings. A room on its valve's own sensor learns from that reading, the one it decides it's warm by, but has no history to start from.
 - `binary_sensor.hearth_radiators_want_heat` carries the same on/off, with the rooms asking in `rooms_asking`, for anything else that wants to follow it.
 
 **Underfloor rooms (Heatmiser neoStats, through the [heatmiserneo](https://github.com/MindrustUK/Heatmiser-for-home-assistant) integration).** The stat runs the schedule itself.
-- Hearth writes the schedule to the neoHub as a 5/2-day profile (`Hearth Kitchen`, `Hearth Kitchen Fixed`, `Hearth Kitchen Off`) and makes the stat run it.
+- Hearth writes the schedule to the neoHub as a 5/2-day profile (`Hearth Kitchen`, or `Hearth Kitchen Fixed` for a fixed temperature) and makes the stat run it. Off is the stat's own standby, which keeps its frost protection.
 - The stat keeps its own early start and carries on if Home Assistant is down. When it starts early, the room says "Warming up early", the same as a radiator room.
 - Hearth learns how fast the floor warms, from the stat's heating and the room's temperature, so the room can say how long it has to go.
 - Writing the schedule to the neoHub can take a minute. It happens in the background, and the room says "Sending the change to the thermostat…" meanwhile.
-- − and + set the stat's own temperature, which lasts until its next level. Boost and Away are holds on the stat.
+- − and + set the stat's own temperature, which lasts until its next level. Boost and Away are holds on the stat; − and + during a boost change the hold. The Away hold follows the schedule when that's cooler than the away temperature, and is kept up for as long as the house is away.
 - Underfloor rooms call the boiler through their own wiring, so they don't count towards the radiator demand.
 
 ## Install
@@ -92,7 +92,7 @@ title: Upstairs
 
 | Entity | What it is |
 |-|-|
-| `climate.<room>` | One per room. `hvac_action` is `heating`, `preheating` (warming up early), `idle` or `off` in every room. Attributes include `status`, `reason`, `minutes_to_target`, `preheating`, `warm_up_rate` (degrees an hour), `warm_ups`, `schedule`, `next_change_at`, `next_change_temp`, `calling_for_heat`, `kind` and `devices`; radiator rooms also have `preheat_from`. |
+| `climate.<room>` | One per room. `hvac_action` is `heating`, `preheating` (warming up early), `idle` or `off` in every room. Attributes include `status`, `reason`, `problem` (set when a valve, stat or room sensor is offline), `minutes_to_target`, `preheating`, `warm_up_rate` (degrees an hour), `warm_ups`, `schedule`, `next_change_at`, `next_change_temp`, `calling_for_heat`, `kind` and `devices`; radiator rooms also have `preheat_from`. |
 | `select.hearth_house_mode` | Home, Away or Holiday. Point presence automations here. Its attributes carry the boost length and temperature. |
 | `binary_sensor.hearth_radiators_want_heat` | On while the boiler is wanted for the radiators. Its attributes list which rooms are asking. |
 
@@ -104,5 +104,5 @@ title: Upstairs
 
 ## When something looks wrong
 
-1. Read the room's "why" line on the card.
+1. Read the room's line on the card: amber means one of its devices is offline or its sensor has stopped reporting.
 2. If that doesn't explain it, download diagnostics: Settings → Devices & services → Hearth → ⋮ → Download diagnostics. It has every room's settings, schedule, temperature source, devices and the boiler's last command.

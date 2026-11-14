@@ -50,7 +50,10 @@ def test_rate_and_lead() -> None:
     assert preheat.rate(ups) is None  # one isn't enough
     ups = preheat.add(ups, WarmUp(1, 60, at(10), "seen"))
     ups = preheat.add(ups, WarmUp(3, 60, at(20), "history"))
-    assert preheat.rate(ups) == 2.0  # the median, in degrees an hour
+    # Two it saw itself: those are what counts, not the history's.
+    assert preheat.rate(ups) == 1.5
+    # Until then the history fills in: the median, in degrees an hour.
+    assert preheat.rate([ups[0], WarmUp(2, 60, at(0), "seen"), WarmUp(1, 60, at(5), "history")]) == 2.0
     assert preheat.lead_minutes(3, 2.0, 180) == 100  # 90 minutes, plus the margin
     assert preheat.lead_minutes(10, 2.0, 180) == 180  # never earlier than the cap
     assert preheat.lead_minutes(3, 2.0, 0) is None  # turned off

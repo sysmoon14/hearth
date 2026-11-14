@@ -41,6 +41,7 @@ from .const import (
     KIND_RADIATOR,
     SEED_DAYS,
     STORAGE_KEY,
+    STORAGE_MINOR_VERSION,
     STORAGE_VERSION,
 )
 from . import preheat
@@ -54,6 +55,16 @@ SEED_TIMEOUT = 120
 TICK = timedelta(seconds=30)
 
 
+class HearthStore(Store):
+    """What Hearth remembers, brought up to date when it's older."""
+
+    async def _async_migrate_func(self, old_major: int, old_minor: int, data: dict[str, Any]) -> dict[str, Any]:
+        if old_major == 1 and old_minor < 2:
+            for zone in (data.get("zones") or {}).values():
+                zone["warmups"] = [w for w in zone.get("warmups") or [] if w.get("source") != "history"]
+        return data
+
+
 class Hearth:
     """Runs every zone and decides when the radiators need the boiler."""
 
@@ -63,7 +74,13 @@ class Hearth:
         self.settings: dict[str, Any] = {**DEFAULTS, **entry.data, **entry.options}
         self.zones: dict[str, Zone] = {}
         self.house_mode = HOUSE_HOME
-        self.store: Store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
+        self.store: Store = HearthStore(hass, STORAGE_VERSION, STORAGE_KEY, minor_version=STORAGE_MINOR_VERSION)
+        # Set once Hearth has stopped: anything of its still running (a
+        # profile on its way to the neoHub) must leave the house alone.
+        self.stopped = False
+        # One look at the house at a time: a second one waits its turn.
+        self._evaluating = asyncio.Lock()
+        self._switch_missing = False
         self.context = Context()
         self._unsubs: list[Callable[[], None]] = []
         self._eval_pending: Callable[[], None] | None = None
@@ -106,7 +123,10 @@ class Hearth:
             zone = make_zone(self, config, ZoneState.from_dict(saved.get(config[CONF_ZONE_ID])))
             self.zones[zone.id] = zone
         for zone in self.zones.values():
-            await zone.async_start()
+            try:
+                await zone.async_start()
+            except Exception:  # noqa: BLE001 - one room mustn't stop the rest
+                _LOGGER.exception("%s couldn't start cleanly", zone.name)
 
         watched = {e for z in self.zones.values() for e in z.watched_entities()}
         if self.boiler_switch:
@@ -126,6 +146,7 @@ class Hearth:
         """Leave the boiler safe: nothing will turn the switch off once Hearth
         has gone. When Home Assistant stops, that's straight away; when Hearth
         only unloads (to reload, say), a little later, unless it's back by then."""
+        self.stopped = True
         for unsub in self._unsubs:
             unsub()
         self._unsubs.clear()
@@ -188,7 +209,10 @@ class Hearth:
 
     async def _tick(self, now: datetime) -> None:
         for zone in self.zones.values():
-            await zone.async_tick(dt_util.utcnow())
+            try:
+                await zone.async_tick(dt_util.utcnow())
+            except Exception:  # noqa: BLE001 - one room mustn't stop the rest
+                _LOGGER.exception("%s: its regular check failed", zone.name)
         await self.async_evaluate()
 
     # --- learning from history ----------------------------------------------------
@@ -280,13 +304,25 @@ class Hearth:
 
     async def async_evaluate(self) -> None:
         """Push every radiator zone's target and decide on the boiler."""
-        now = dt_util.utcnow()
-        for zone in self.zones.values():
-            zone.update_demand(now)
-        for zone in self.radiator_zones:
-            await zone.async_apply(now)
-        await self._update_boiler()
-        async_dispatcher_send(self.hass, SIGNAL_UPDATE)
+        async with self._evaluating:
+            if self.stopped:
+                return
+            now = dt_util.utcnow()
+            # One room going wrong mustn't stop the others, or the boiler
+            # being turned off when nothing wants it.
+            for zone in self.zones.values():
+                try:
+                    zone.update_demand(now)
+                except Exception:  # noqa: BLE001
+                    _LOGGER.exception("%s: couldn't work out whether it wants heat", zone.name)
+                    zone.calling = False
+            for zone in self.radiator_zones:
+                try:
+                    await zone.async_apply(now)
+                except Exception:  # noqa: BLE001
+                    _LOGGER.exception("%s: couldn't set its valves", zone.name)
+            await self._update_boiler()
+            async_dispatcher_send(self.hass, SIGNAL_UPDATE)
 
     def zones_calling(self) -> list[str]:
         return [z.name for z in self.radiator_zones if z.calling]
@@ -309,7 +345,11 @@ class Hearth:
         """Call for heat by turning the switch on, or stop by turning it off."""
         state = self.hass.states.get(self.boiler_switch)
         if state is None or state.state not in ("on", "off"):
+            if not self._switch_missing:
+                _LOGGER.warning("%s is unavailable: Hearth can't ask for heat, or stop asking, until it's back", self.boiler_switch)
+            self._switch_missing = True
             return
+        self._switch_missing = False
         if not force and state.state == ("on" if on else "off"):
             return
         if not force and self._switch_sent and self._switch_sent[0] == on and monotonic.monotonic() - self._switch_sent[1] < 60:

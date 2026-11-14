@@ -47,6 +47,10 @@ from .const import (
     DEMAND_BELOW,
     VALVES_SHUT_MINUTES,
     EXTERNAL_REFRESH_SECONDS,
+    READING_SETTLE_SECONDS,
+    READING_STEP,
+    SENSOR_GONE_SECONDS,
+    SENSOR_STALE_HOURS,
     HOUSE_AWAY,
     HOUSE_HOLIDAY,
     HOUSE_HOME,
@@ -88,6 +92,10 @@ STAT_SETTLE = 120
 # one write at a time, only the latest, and again if the stat hasn't taken it.
 STAT_RECHECK = 45
 STAT_TRIES = 3
+# Away on a stat is a hold, and a hold runs out: it's set for this long and
+# set again well before it ends.
+AWAY_HOLD_MINUTES = 99 * 60
+AWAY_HOLD_RENEW = 12 * 3600
 
 
 def _float(value: Any) -> float | None:
@@ -198,6 +206,11 @@ class Zone:
         self.context = Context()
         # A warm-up being timed: when it started, from what, and to what.
         self._warming: tuple[datetime, float, float] | None = None
+        self._stale_logged = False
+        # The sensor's reading as the room takes it (see READING_STEP), and
+        # since when the sensor has said something slightly different.
+        self._reading: float | None = None
+        self._moved_since: float | None = None
 
     # --- settings -----------------------------------------------------
     def _setting(self, key: str) -> float:
@@ -211,14 +224,51 @@ class Zone:
         return [self.sensor] if self.sensor else []
 
     # --- reading ----------------------------------------------------------
+    def sensor_stale(self) -> bool:
+        """The room's sensor has a reading but stopped reporting long ago."""
+        state = self.hass.states.get(self.sensor) if self.sensor else None
+        if state is None or state.state in BAD_STATES:
+            return False
+        stale = dt_util.utcnow() - state.last_reported > timedelta(hours=SENSOR_STALE_HOURS)
+        if stale and not self._stale_logged:
+            _LOGGER.warning(
+                "%s: %s hasn't reported for %s hours; using the room's own reading until it does",
+                self.name, self.sensor, SENSOR_STALE_HOURS,
+            )
+        self._stale_logged = stale
+        return stale
+
     def _sensor_temp(self) -> float | None:
         if not self.sensor:
             return None
         state = self.hass.states.get(self.sensor)
-        return None if state is None or state.state in BAD_STATES else _float(state.state)
+        raw = None if state is None or state.state in BAD_STATES or self.sensor_stale() else _float(state.state)
+        if raw is None:
+            self._reading = self._moved_since = None
+            return None
+        held, now = self._reading, monotonic.monotonic()
+        moved = 0.0 if held is None else abs(raw - held)
+        if held is None or moved >= READING_STEP - 0.01:
+            self._reading, self._moved_since = raw, None
+        elif moved < 0.01:
+            self._moved_since = None
+        elif self._moved_since is None:
+            self._moved_since = now
+        elif now - self._moved_since >= READING_SETTLE_SECONDS:
+            self._reading, self._moved_since = raw, None
+        return self._reading
 
     def room_temp(self) -> float | None:
         return self._sensor_temp()
+
+    # Whose reading the room falls back on, for the words below.
+    _own_words = "the device's"
+
+    def problem(self) -> str | None:
+        """Something the house should know about, or None when all is well."""
+        if self.sensor and self._sensor_temp() is None:
+            return f"The room sensor isn't reporting: using {self._own_words} own reading"
+        return None
 
     def _base(self, now: datetime) -> tuple[float, str]:
         """Target and reason from the zone's own mode, before house modes."""
@@ -475,6 +525,8 @@ class Zone:
             "warm_ups": len(self.state.warmups),
             "warm_ups_from_history": sum(1 for w in self.state.warmups if w.source == "history"),
             "room_sensor": self.sensor,
+            "room_sensor_stale": self.sensor_stale(),
+            "problem": self.problem(),
         }
 
     async def _call(self, domain: str, service: str, data: dict[str, Any]) -> bool:
@@ -493,6 +545,7 @@ class RadiatorZone(Zone):
 
     kind = KIND_RADIATOR
     _own_reading = "valves"
+    _own_words = "the valve's"
 
     def __init__(self, hub: Hearth, config: dict[str, Any], state: ZoneState) -> None:
         super().__init__(hub, config, state)
@@ -503,6 +556,8 @@ class RadiatorZone(Zone):
         self._early_for: datetime | None = None
         # Since when every valve has said it's shut.
         self._shut_since: datetime | None = None
+        # Since when the room's sensor has had no reading to give.
+        self._sensor_gone_since: float | None = None
 
     def watched_entities(self) -> list[str]:
         return [*self.trvs, *super().watched_entities()]
@@ -533,11 +588,28 @@ class RadiatorZone(Zone):
             for s in states
         )
 
+    def valves_offline(self) -> list[str]:
+        return [e for e in self.trvs if (s := self.hass.states.get(e)) is None or s.state in BAD_STATES]
+
+    def problem(self) -> str | None:
+        offline = len(self.valves_offline())
+        if offline and offline == len(self.trvs):
+            return f"Can't heat: {'the valve is' if offline == 1 else 'the valves are'} offline"
+        if offline:
+            return "A valve is offline"
+        return super().problem()
+
     def update_demand(self, now: datetime) -> bool:
         """Whether this room wants the boiler, with a little hysteresis."""
         target = self.desired(now)[0]
         room = self.room_temp()
         was = self.calling
+        if self.trvs and len(self.valves_offline()) == len(self.trvs):
+            # No valve to open: the boiler would fire for a radiator that
+            # can't take the heat, for as long as the room stayed cold.
+            self.calling, self._shut_since = False, None
+            self._time_warm_up(now, was, target)
+            return False
         if self.valves_shut():
             self._shut_since = self._shut_since or now
         else:
@@ -633,20 +705,38 @@ class RadiatorZone(Zone):
         )
 
     async def _apply_external(self, trv: str) -> None:
-        room = self._sensor_temp()
-        if room is None:
-            return
         select = self._companion(trv, "_temperature_sensor_select", "select")
         number = self._companion(trv, "_external_temperature_input", "number")
         if not select or not number:
             return
-        now = monotonic.monotonic()
-        sent = self._sent_external.get(trv)
-        if sent is None or abs(sent[0] - room) >= 0.1 or now - sent[1] > EXTERNAL_REFRESH_SECONDS:
-            if await self._call("number", "set_value", {"entity_id": number, "value": room}):
-                self._sent_external[trv] = (room, now)
         sel = self.hass.states.get(select)
-        if sel is not None and sel.state != "remote_temperature" and "remote_temperature" in (sel.attributes.get("options") or []):
+        options = (sel.attributes.get("options") or []) if sel is not None else []
+        room = self._sensor_temp()
+        now = monotonic.monotonic()
+        if room is None:
+            # The room's sensor has gone, and stayed gone: the valve goes back
+            # to its own, rather than holding the last reading it was sent.
+            if not self.sensor:
+                return
+            if self._sensor_gone_since is None:
+                self._sensor_gone_since = now
+            if (
+                now - self._sensor_gone_since >= SENSOR_GONE_SECONDS
+                and sel is not None and sel.state == "remote_temperature" and "local_temperature" in options
+            ):
+                self._sent_external.pop(trv, None)
+                await self._call("select", "select_option", {"entity_id": select, "option": "local_temperature"})
+            return
+        self._sensor_gone_since = None
+        sent = self._sent_external.get(trv)
+        send = sent is None or sent[0] != room or now - sent[1] > EXTERNAL_REFRESH_SECONDS
+        if send:
+            # Marked as sent first, so a second look while this one is on its
+            # way doesn't send it again.
+            self._sent_external[trv] = (room, now)
+            if not await self._call("number", "set_value", {"entity_id": number, "value": room}):
+                self._sent_external.pop(trv, None)
+        if sel is not None and sel.state != "remote_temperature" and "remote_temperature" in options:
             await self._call("select", "select_option", {"entity_id": select, "option": "remote_temperature"})
 
     def handle_state_change(self, entity_id: str, old: State | None, new: State | None) -> None:
@@ -705,12 +795,20 @@ class UnderfloorZone(Zone):
 
     kind = KIND_UNDERFLOOR
     _own_reading = "stat"
+    _own_words = "the stat's"
+
+    def problem(self) -> str | None:
+        state = self._stat_state
+        if state is None or state.state in BAD_STATES:
+            return "The thermostat is offline"
+        return super().problem()
 
     def __init__(self, hub: Hearth, config: dict[str, Any], state: ZoneState) -> None:
         super().__init__(hub, config, state)
         self.stat: str = config[CONF_STAT]
         self.profile: str = config.get(CONF_PROFILE) or f"Hearth {self.name}"
-        self._held_for_away = False
+        # The Away hold on the stat: its temperature and when it was set.
+        self._away_hold: tuple[float, float] | None = None
         self._settle_until = 0.0
         self._want: float | None = None  # the setpoint the stat should take
         self._writing: asyncio.Task | None = None
@@ -759,7 +857,20 @@ class UnderfloorZone(Zone):
 
     async def async_set_mode(self, mode: str) -> None:
         self._off_on_stat = False
+        self._away_hold = None  # standby and a new profile both end a hold
         await super().async_set_mode(mode)
+
+    async def async_set_target(self, temp: float) -> None:
+        """During a boost, + and - change the hold the stat is running."""
+        now = dt_util.utcnow()
+        if not self.boost_active(now):
+            await super().async_set_target(temp)
+            return
+        self.state.boost_temp = _clamp(temp)
+        left = (self.state.boost_until - now).total_seconds() / 60
+        self._sent()
+        await self._hold(self.state.boost_temp, max(1, round(left)))
+        await self._changed(sync=False)
 
     @property
     def _stat_state(self) -> State | None:
@@ -870,7 +981,8 @@ class UnderfloorZone(Zone):
                 await self._sync_now()
         finally:
             self._syncing = None
-            await self.hub.async_evaluate()
+            if not self.hub.stopped:
+                await self.hub.async_evaluate()
 
     async def _sync_now(self) -> None:
         """Off is the stat's own standby, which keeps frost protection."""
@@ -930,6 +1042,8 @@ class UnderfloorZone(Zone):
 
     async def async_tick(self, now: datetime) -> None:
         await super().async_tick(now)
+        if not self.syncing:
+            await self._keep_away(now)
         if self._want is None:
             return
         state = self._stat_state
@@ -955,26 +1069,51 @@ class UnderfloorZone(Zone):
         )
 
     async def _start_boost(self, minutes: int) -> None:
+        """A room that's off is in standby, where the stat ignores a hold:
+        it comes out for the boost and goes back after."""
+        self._sent()
+        if self.in_standby:
+            await self._call("climate", "set_preset_mode", {"entity_id": self.stat, "preset_mode": "home"})
         await self._hold(self.state.boost_temp or self._setting(CONF_BOOST_TEMP), minutes)
 
     async def _end_boost(self) -> None:
         await self._call("heatmiserneo", "hold_off", {"entity_id": self.stat})
-        await self._reapply_away()
+        await self._after_boost()
 
     async def _boost_expired(self) -> None:
-        await self._reapply_away()
+        await self._after_boost()
 
-    async def _reapply_away(self) -> None:
-        if self.hub.house_mode == HOUSE_AWAY and self.state.mode != MODE_OFF:
-            await self._hold(self._setting(CONF_AWAY_TEMP), 99 * 60)
-            self._held_for_away = True
+    async def _after_boost(self) -> None:
+        self._away_hold = None
+        if self.state.mode == MODE_OFF:
+            self._sent()
+            if not self.in_standby:
+                await self._call("climate", "set_preset_mode", {"entity_id": self.stat, "preset_mode": "standby"})
+            return
+        await self._keep_away(dt_util.utcnow())
+
+    async def _keep_away(self, now: datetime) -> None:
+        """While the house is Away, hold the stat no warmer than the away
+        temperature: at what the room would be doing if that's cooler, the
+        same as a radiator room. Set again when that changes and before the
+        hold runs out, however long the house is away."""
+        if self.hub.house_mode != HOUSE_AWAY or self.state.mode == MODE_OFF or self.boost_active(now):
+            return
+        want = min(self._base(now)[0], self._setting(CONF_AWAY_TEMP))
+        held = self._away_hold
+        if held and held[0] == want and monotonic.monotonic() - held[1] < AWAY_HOLD_RENEW:
+            return
+        self._away_hold = (want, monotonic.monotonic())
+        self._sent()
+        await self._hold(want, AWAY_HOLD_MINUTES)
 
     async def async_house_changed(self, old: str, new: str) -> None:
         if new == HOUSE_AWAY:
-            await self._reapply_away()
+            self._away_hold = None
+            await self._keep_away(dt_util.utcnow())
         elif old == HOUSE_AWAY:
             await self._call("heatmiserneo", "hold_off", {"entity_id": self.stat})
-            self._held_for_away = False
+            self._away_hold = None
 
     async def async_start(self) -> None:
         """Adopt whatever the stat is already running."""
@@ -1025,11 +1164,21 @@ class UnderfloorZone(Zone):
             and not self._settling
             and stat_target is not None
             and stat_target != temp
+            and not self._around_a_change(now, stat_target)
         ):
             upcoming = self.next_scheduled(now)
             when = f" until {_when(upcoming[0], now)}" if upcoming else ""
             return stat_target, f"Changed on the thermostat to {_deg(stat_target)}{when}"
         return temp, reason
+
+    def _around_a_change(self, now: datetime, stat_target: float) -> bool:
+        """The stat is at what the schedule asked for a moment ago, or will a
+        moment from now: it reports late and its clock isn't Hearth's, so
+        that's the schedule changing, not someone at the stat."""
+        gap = timedelta(seconds=STAT_SETTLE)
+        return any(
+            temp_at(self.state.schedule, dt_util.as_local(now + step)) == stat_target for step in (-gap, gap)
+        )
 
     def attributes(self, now: datetime) -> dict[str, Any]:
         return {**super().attributes(now), "devices": [self.stat],
