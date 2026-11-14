@@ -3,9 +3,9 @@ house settings, in one place.
 
 One JS module (frontend/hearth-panel.js, no build step) and a few
 websocket commands. Rooms and house settings are saved to the entry's
-options, the same ones the options flow edits; schedules, modes, boosts
-and Home/Away/Holiday go through Hearth's own actions and entities.
-Admins only, as the options are.
+options; schedules, modes, boosts and Home/Away/Holiday go through
+Hearth's own actions and entities. Everyone in the house sees the panel;
+only admins change rooms and house settings.
 """
 
 from __future__ import annotations
@@ -23,13 +23,9 @@ from homeassistant.util import slugify
 from .const import (
     CARD_FILE,
     CONF_AWAY_TEMP,
-    CONF_BOILER,
-    CONF_BOILER_OFF,
-    CONF_BOILER_ON,
     CONF_BOILER_SWITCH,
     CONF_BOOST_MINUTES,
     CONF_BOOST_TEMP,
-    CONF_FALLBACK,
     CONF_HOLIDAY_TEMP,
     CONF_KIND,
     CONF_NAME,
@@ -56,13 +52,12 @@ PANEL_FILE = "hearth-panel.js"
 
 # House settings the panel can change, and what each accepts.
 TEMPS = {
-    CONF_BOILER_ON: (15, 32), CONF_BOILER_OFF: (5, 18), CONF_FALLBACK: (5, 22),
-    CONF_BOOST_TEMP: (15, 28), CONF_AWAY_TEMP: (5, 22), CONF_HOLIDAY_TEMP: (5, 18),
-    CONF_OFF_TEMP: (5, 15),
+    CONF_BOOST_TEMP: (15, 28), CONF_AWAY_TEMP: (5, 22), CONF_HOLIDAY_TEMP: (5, 18), CONF_OFF_TEMP: (5, 15),
 }
 SECONDS = {CONF_ON_DELAY: (0, 900), CONF_OFF_DELAY: (0, 1800), CONF_BOOST_MINUTES: (15, 240),
            CONF_PREHEAT_MAX: (0, 360)}
-OPTIONAL_ENTITIES = (CONF_BOILER, CONF_BOILER_SWITCH)
+OPTIONAL_ENTITIES = (CONF_BOILER_SWITCH,)
+SWITCH_DOMAINS = ("switch", "input_boolean")
 
 
 @callback
@@ -85,7 +80,7 @@ async def async_show(hass: HomeAssistant) -> None:
     await panel_custom.async_register_panel(
         hass, frontend_url_path=PANEL, webcomponent_name="hearth-panel", sidebar_title="Hearth",
         sidebar_icon="mdi:radiator", module_url=f"{FRONTEND_URL}/{PANEL_FILE}?v={VERSION}",
-        require_admin=True, config={},
+        require_admin=False, config={},
     )
 
 
@@ -108,7 +103,7 @@ def _own(hass: HomeAssistant, entry: ConfigEntry, unique: str, domain: str) -> s
     return er.async_get(hass).async_get_entity_id(domain, DOMAIN, f"{entry.entry_id}_{unique}")
 
 
-def _info(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, Any]:
+def _info(hass: HomeAssistant, entry: ConfigEntry, is_admin: bool) -> dict[str, Any]:
     options = {**DEFAULTS, **entry.options}
     hub = entry.runtime_data if entry.state is ConfigEntryState.LOADED else None
     rooms = []
@@ -129,6 +124,7 @@ def _info(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, Any]:
         "entry_id": entry.entry_id,
         "loaded": hub is not None,
         "version": VERSION,
+        "is_admin": is_admin,
         "rooms": rooms,
         "settings": {k: options.get(k) for k in (*OPTIONAL_ENTITIES, *TEMPS, *SECONDS)},
         "house_mode": _own(hass, entry, "house_mode", "select"),
@@ -140,14 +136,13 @@ def _info(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, Any]:
 
 
 @websocket_api.websocket_command({vol.Required("type"): "hearth/info"})
-@websocket_api.require_admin
 @callback
 def ws_info(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
     entry = _entry(hass)
     if entry is None:
         connection.send_error(msg["id"], websocket_api.ERR_NOT_FOUND, "Hearth isn't set up")
         return
-    connection.send_result(msg["id"], _info(hass, entry))
+    connection.send_result(msg["id"], _info(hass, entry, connection.user.is_admin))
 
 
 def _unique_id(zones: list[dict[str, Any]], name: str, keep: str | None) -> str:
@@ -219,15 +214,14 @@ def ws_remove_room(hass: HomeAssistant, connection: websocket_api.ActiveConnecti
     zones = [z for z in entry.options.get(CONF_ZONES, []) if z[CONF_ZONE_ID] != room_id]
     options = {**entry.options, CONF_ZONES: zones}
     hass.config_entries.async_update_entry(entry, options=options)
-    # The room's entity goes with it.
+    # The room's entity goes with it, and its device when Hearth reloads.
     if entity_id := _room_entity(hass, entry, room_id):
         er.async_get(hass).async_remove(entity_id)
     connection.send_result(msg["id"], {})
 
 
 HOUSE = {
-    vol.Optional(CONF_BOILER): vol.Any(None, cv.entity_id),
-    vol.Optional(CONF_BOILER_SWITCH): vol.Any(None, cv.entity_id),
+    vol.Optional(CONF_BOILER_SWITCH): vol.Any(None, vol.All(cv.entity_id, cv.entity_domain(SWITCH_DOMAINS))),
     **{vol.Optional(k): vol.All(vol.Coerce(float), vol.Range(min=lo, max=hi)) for k, (lo, hi) in TEMPS.items()},
     **{vol.Optional(k): vol.All(vol.Coerce(int), vol.Range(min=lo, max=hi)) for k, (lo, hi) in SECONDS.items()},
 }
@@ -237,7 +231,7 @@ HOUSE = {
 @websocket_api.require_admin
 @callback
 def ws_save_house(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
-    """The house settings it sends; None clears the boiler or switch."""
+    """The house settings it sends; None clears the switch."""
     entry = _entry(hass)
     if entry is None:
         connection.send_error(msg["id"], websocket_api.ERR_NOT_FOUND, "Hearth isn't set up")

@@ -118,6 +118,15 @@ def _deg(temp: float) -> str:
     return f"{temp:g}°"
 
 
+def _duration(minutes: float) -> str:
+    """'35 min', '1 h', '1 h 20 min', to the nearest 5 minutes."""
+    m = max(5, int(round(minutes / 5) * 5))
+    hours, mins = divmod(m, 60)
+    if not hours:
+        return f"{mins} min"
+    return f"{hours} h {mins} min" if mins else f"{hours} h"
+
+
 @dataclass
 class ZoneState:
     """What a zone remembers across restarts."""
@@ -186,6 +195,8 @@ class Zone:
         self.state = state
         self.calling = False
         self.context = Context()
+        # A warm-up being timed: when it started, from what, and to what.
+        self._warming: tuple[datetime, float, float] | None = None
 
     # --- settings -----------------------------------------------------
     def _setting(self, key: str) -> float:
@@ -217,7 +228,8 @@ class Zone:
         if st.mode == MODE_FIXED:
             return st.fixed, f"Fixed at {_deg(st.fixed)}"
         if st.override_temp is not None and st.override_until and now < st.override_until:
-            return st.override_temp, f"{_deg(st.override_temp)} until {_when(st.override_until, now)}, then the schedule"
+            back = temp_at(st.schedule, dt_util.as_local(st.override_until))
+            return st.override_temp, f"{_deg(st.override_temp)} until {_when(st.override_until, now)}, then {_deg(back)}"
         temp = temp_at(st.schedule, dt_util.as_local(now))
         upcoming = next_change(st.schedule, dt_util.as_local(now))
         if upcoming:
@@ -255,6 +267,92 @@ class Zone:
     def preheating(self, now: datetime) -> bool:
         """Whether the room is warming up early for its next change."""
         return False
+
+    def update_demand(self, now: datetime) -> bool:
+        """Whether the room is heating now; each kind decides."""
+        return self.calling
+
+    # --- how fast the room warms ------------------------------------------
+    def _time_warm_up(self, now: datetime, was: bool, target: float) -> None:
+        """Time each warm-up, from asking for heat to reaching the target, by
+        the same reading the room decides it's warm by."""
+        room = self.room_temp()
+        if room is None:
+            self._warming = None
+            return
+        if self.calling and not was:
+            self._warming = (now, room, target)
+            return
+        if self._warming is None:
+            return
+        start, start_temp, aim = self._warming
+        minutes = (now - start).total_seconds() / 60
+        if minutes > preheat.MAX_MINUTES:
+            self._warming = None  # something else was going on: a window open, a valve shut
+            return
+        if target != aim:
+            # The target moved before the room got there (a schedule change,
+            # a tap on − or +). How far it rose so far is still a fair measure.
+            if preheat.counts(room - start_temp, minutes):
+                self.learn(WarmUp(room - start_temp, minutes, start, "seen"))
+            self._warming = (now, room, target) if self.calling else None
+            return
+        if not self.calling:
+            self._warming = None
+            if preheat.counts(room - start_temp, minutes):
+                self.learn(WarmUp(room - start_temp, minutes, start, "seen"))
+
+    def learn(self, warmup: WarmUp) -> None:
+        self.state.warmups = preheat.add(self.state.warmups, warmup)
+        self.hub.async_save()
+
+    def seed(self, warmups: list[WarmUp]) -> None:
+        """Warm-ups read from the recorder's history, once."""
+        for warmup in warmups:
+            self.state.warmups = preheat.add(self.state.warmups, warmup)
+        self.state.seeded = True
+        self.hub.async_save()
+
+    def warm_rate(self) -> float | None:
+        """Degrees an hour, once the room has seen enough warm-ups."""
+        return preheat.rate(self.state.warmups)
+
+    def heating_to(self, now: datetime) -> float | None:
+        """The temperature the room is warming towards: its target, or the
+        next change's while it's warming up early."""
+        target = self.target()
+        if self.preheating(now) and (upcoming := self.next_scheduled(now)):
+            return max(upcoming[1], target) if target is not None else upcoming[1]
+        return target
+
+    def minutes_to_target(self, now: datetime) -> float | None:
+        """While the room heats, about how long until it's there, from how
+        fast it has warmed before."""
+        if not self.calling:
+            return None
+        room, goal, rate = self.room_temp(), self.heating_to(now), self.warm_rate()
+        if room is None or goal is None or not rate or rate <= 0 or goal <= room:
+            return None
+        return (goal - room) / rate * 60
+
+    def status(self, now: datetime) -> str:
+        """What the room is doing, in the same words in every room."""
+        if self.state.mode == MODE_OFF and self.hub.house_mode != HOUSE_HOLIDAY and not self.boost_active(now):
+            return "Off"
+        goal = self.heating_to(now)
+        if self.preheating(now):
+            upcoming = self.next_scheduled(now)
+            by = f" by {_when(upcoming[0], now)}" if upcoming else ""
+            return f"Warming up early · {_deg(goal)}{by}" if goal is not None else "Warming up early"
+        if self.calling:
+            to = f"Heating to {_deg(goal)}" if goal is not None else "Heating"
+            minutes = self.minutes_to_target(now)
+            if minutes is not None:
+                return f"{to} · about {_duration(minutes)}"
+            if self.warm_rate() is None:
+                return f"{to} · still learning how long it takes"
+            return to
+        return "Comfortable"
 
     # --- changing ---------------------------------------------------------
     async def async_set_mode(self, mode: str) -> None:
@@ -342,7 +440,16 @@ class Zone:
         """Hook: Home, Away or Holiday changed."""
 
     async def async_start(self) -> None:
-        """Hook: run once when Hearth starts."""
+        """Start learning afresh if the room's temperature now comes from
+        somewhere else."""
+        source = self.sensor or self._own_reading
+        if self.state.learned_with != source:
+            self.state.warmups, self.state.seeded = [], False
+            self.state.learned_with = source
+            self.hub.async_save()
+
+    # Where the room's temperature comes from without a sensor of its own.
+    _own_reading = "device"
 
     def handle_state_change(self, entity_id: str, old: State | None, new: State | None) -> None:
         """Hook: a watched entity changed."""
@@ -360,6 +467,12 @@ class Zone:
             "boost_until": self.state.boost_until.isoformat() if self.boost_active(now) else None,
             "override_until": self.state.override_until.isoformat() if self.state.override_until else None,
             "calling_for_heat": self.calling,
+            "status": self.status(now),
+            "preheating": self.preheating(now),
+            "minutes_to_target": round(m) if (m := self.minutes_to_target(now)) is not None else None,
+            "warm_up_rate": round(rate, 2) if (rate := self.warm_rate()) is not None else None,
+            "warm_ups": len(self.state.warmups),
+            "warm_ups_from_history": sum(1 for w in self.state.warmups if w.source == "history"),
             "room_sensor": self.sensor,
         }
 
@@ -378,14 +491,13 @@ class RadiatorZone(Zone):
     """Valves on radiators: Home Assistant runs the schedule."""
 
     kind = KIND_RADIATOR
+    _own_reading = "valves"
 
     def __init__(self, hub: Hearth, config: dict[str, Any], state: ZoneState) -> None:
         super().__init__(hub, config, state)
         self.trvs: list[str] = list(config.get(CONF_TRVS) or [])
         self._sent_target: dict[str, tuple[float, float]] = {}
         self._sent_external: dict[str, tuple[float, float]] = {}
-        # A warm-up being timed: when it started, from what, and to what.
-        self._warming: tuple[datetime, float, float] | None = None
         # The schedule change the room is warming up early for.
         self._early_for: datetime | None = None
 
@@ -425,50 +537,6 @@ class RadiatorZone(Zone):
         return self.calling
 
     # --- warming up early -------------------------------------------------
-    def _time_warm_up(self, now: datetime, was: bool, target: float) -> None:
-        """Time each warm-up, from asking for heat to reaching the target, by
-        the same reading the room decides it's warm by."""
-        room = self.room_temp()
-        if room is None:
-            self._warming = None
-            return
-        if self.calling and not was:
-            self._warming = (now, room, target)
-            return
-        if self._warming is None:
-            return
-        start, start_temp, aim = self._warming
-        minutes = (now - start).total_seconds() / 60
-        if minutes > preheat.MAX_MINUTES:
-            self._warming = None  # something else was going on: a window open, a valve shut
-            return
-        if target != aim:
-            # The target moved before the room got there (a schedule change,
-            # a tap on − or +). How far it rose so far is still a fair measure.
-            if preheat.counts(room - start_temp, minutes):
-                self.learn(WarmUp(room - start_temp, minutes, start, "seen"))
-            self._warming = (now, room, target) if self.calling else None
-            return
-        if not self.calling:
-            self._warming = None
-            if preheat.counts(room - start_temp, minutes):
-                self.learn(WarmUp(room - start_temp, minutes, start, "seen"))
-
-    def learn(self, warmup: WarmUp) -> None:
-        self.state.warmups = preheat.add(self.state.warmups, warmup)
-        self.hub.async_save()
-
-    def seed(self, warmups: list[WarmUp]) -> None:
-        """Warm-ups read from the recorder's history, once."""
-        for warmup in warmups:
-            self.state.warmups = preheat.add(self.state.warmups, warmup)
-        self.state.seeded = True
-        self.hub.async_save()
-
-    def warm_rate(self) -> float | None:
-        """Degrees an hour, once the room has seen enough warm-ups."""
-        return preheat.rate(self.state.warmups)
-
     def warm_from(self, now: datetime, upcoming: tuple[datetime, float] | None = None) -> datetime | None:
         """When the room should start warming for its next change."""
         upcoming = upcoming or self.next_scheduled(now)
@@ -583,13 +651,8 @@ class RadiatorZone(Zone):
         await super().async_set_target(temp)
 
     async def async_start(self) -> None:
-        """Start learning afresh if the room's sensor changed, and give a new
-        zone with the default schedule the valve's own."""
-        source = self.sensor or "valves"
-        if self.state.learned_with != source:
-            self.state.warmups, self.state.seeded = [], False
-            self.state.learned_with = source
-            self.hub.async_save()
+        """Give a new zone with the default schedule the valve's own."""
+        await super().async_start()
         await self._adopt_valve_schedule()
 
     async def _adopt_valve_schedule(self) -> None:
@@ -610,20 +673,11 @@ class RadiatorZone(Zone):
 
     def attributes(self, now: datetime) -> dict[str, Any]:
         attrs = {**super().attributes(now), "devices": self.trvs}
-        rate = self.warm_rate()
-        warmups = self.state.warmups
-        preheating = self.preheating(now)
         upcoming = self.next_scheduled(now)
         start = None
-        if not preheating and upcoming and upcoming[1] > self.desired(now)[0]:
+        if not attrs["preheating"] and upcoming and upcoming[1] > self.desired(now)[0]:
             start = self.warm_from(now, upcoming)
-        attrs.update({
-            "warm_up_rate": round(rate, 2) if rate is not None else None,
-            "warm_ups": len(warmups),
-            "warm_ups_from_history": sum(1 for w in warmups if w.source == "history"),
-            "preheating": preheating,
-            "preheat_from": start.isoformat() if start and start < upcoming[0] else None,
-        })
+        attrs["preheat_from"] = start.isoformat() if start and start < upcoming[0] else None
         return attrs
 
 
@@ -631,6 +685,7 @@ class UnderfloorZone(Zone):
     """A Heatmiser stat: the stat runs the schedule, written as a profile."""
 
     kind = KIND_UNDERFLOOR
+    _own_reading = "stat"
 
     def __init__(self, hub: Hearth, config: dict[str, Any], state: ZoneState) -> None:
         super().__init__(hub, config, state)
@@ -642,6 +697,10 @@ class UnderfloorZone(Zone):
         self._writing: asyncio.Task | None = None
         self._written_at = 0.0
         self._tries = 0
+        # Writing the profile to the neoHub can take a minute: it runs in the
+        # background, once more if something changed meanwhile.
+        self._syncing: asyncio.Task | None = None
+        self._sync_again = False
 
     def _sent(self) -> None:
         self._settle_until = monotonic.monotonic() + STAT_SETTLE
@@ -675,8 +734,26 @@ class UnderfloorZone(Zone):
 
     def update_demand(self, now: datetime) -> bool:
         state = self._stat_state
+        was = self.calling
         self.calling = bool(state and state.attributes.get("hvac_action") in ("heating", "preheating"))
+        target = self.target()
+        if target is not None:
+            self._time_warm_up(now, was, target)
         return self.calling
+
+    def preheating(self, now: datetime) -> bool:
+        """The stat warms the floor early by itself (its optimum start)."""
+        state = self._stat_state
+        return bool(state and state.attributes.get("hvac_action") == "preheating")
+
+    @property
+    def syncing(self) -> bool:
+        return self._syncing is not None and not self._syncing.done()
+
+    def status(self, now: datetime) -> str:
+        if self.syncing:
+            return "Sending the change to the thermostat…"
+        return super().status(now)
 
     def _profile_for_mode(self) -> str:
         if self.state.mode == MODE_FIXED:
@@ -730,9 +807,24 @@ class UnderfloorZone(Zone):
         return bool(state and state.attributes.get("preset_mode") == "standby")
 
     async def async_sync(self) -> None:
-        """Write the profile for the current mode and make the stat run it.
+        """Write the profile for the current mode and make the stat run it,
+        in the background: the neoHub can take a minute."""
+        self._sent()
+        self._sync_again = True
+        if not self.syncing:
+            self._syncing = self.hass.async_create_task(self._sync_loop(), f"hearth {self.id} profile")
 
-        Off is the stat's own standby, which keeps frost protection."""
+    async def _sync_loop(self) -> None:
+        try:
+            while self._sync_again:
+                self._sync_again = False
+                await self._sync_now()
+        finally:
+            self._syncing = None
+            await self.hub.async_evaluate()
+
+    async def _sync_now(self) -> None:
+        """Off is the stat's own standby, which keeps frost protection."""
         self._sent()
         if self.state.mode == MODE_OFF:
             if not self.in_standby:
@@ -837,6 +929,7 @@ class UnderfloorZone(Zone):
 
     async def async_start(self) -> None:
         """Adopt whatever the stat is already running."""
+        await super().async_start()
         if self.in_standby:
             if self.state.mode != MODE_OFF:
                 self.state.mode = MODE_OFF
@@ -859,6 +952,17 @@ class UnderfloorZone(Zone):
         if self.state.mode == MODE_OFF and self.hub.house_mode != HOUSE_HOLIDAY and not self.boost_active(now):
             return self._setting(CONF_OFF_TEMP), "Off: the thermostat keeps frost protection"
         temp, reason = super().desired(now)
+        upcoming = self.next_scheduled(now)
+        if (
+            self.preheating(now)
+            and self.state.mode == MODE_SCHEDULE
+            and self.hub.house_mode == HOUSE_HOME
+            and not self.boost_active(now)
+            and self.state.override_until is None
+            and upcoming
+            and upcoming[1] > temp
+        ):
+            return temp, f"Warming up early for {_deg(upcoming[1])} by {_when(upcoming[0], now)}"
         stat = self._stat_state
         stat_target = _float(stat.attributes.get(ATTR_TEMPERATURE)) if stat else None
         if (
@@ -876,17 +980,11 @@ class UnderfloorZone(Zone):
         return temp, reason
 
     def attributes(self, now: datetime) -> dict[str, Any]:
-        state = self._stat_state
-        attrs = {**super().attributes(now), "devices": [self.stat],
-                 "profile": "standby" if self.state.mode == MODE_OFF else self._profile_for_mode()}
-        if state is not None and state.attributes.get("hvac_action") == "preheating":
-            attrs["reason"] = f"Warming up early for {_deg(_float(state.attributes.get(ATTR_TEMPERATURE)) or 0)}"
-        return attrs
+        return {**super().attributes(now), "devices": [self.stat],
+                "profile": "standby" if self.state.mode == MODE_OFF else self._profile_for_mode()}
 
 
 async def _sleep(seconds: float) -> None:
-    import asyncio  # noqa: PLC0415
-
     await asyncio.sleep(seconds)
 
 

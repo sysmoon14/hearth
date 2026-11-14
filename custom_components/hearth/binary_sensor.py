@@ -37,6 +37,6 @@ class RadiatorDemand(HearthEntity, BinarySensorEntity):
     def extra_state_attributes(self) -> dict[str, Any]:
         return {
             "rooms_asking": self.hub.zones_calling(),
-            "boiler": self.hub.boiler,
-            "last_boiler_command": self.hub.last_boiler_command,
+            "switch": self.hub.boiler_switch,
+            "last_command": self.hub.last_boiler_command,
         }

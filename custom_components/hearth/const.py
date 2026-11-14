@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 DOMAIN = "hearth"
-VERSION = "0.4.5"
+VERSION = "1.0.0b1"
 
 # Zone kinds
 KIND_RADIATOR = "radiator"
@@ -42,13 +42,10 @@ CONF_SENSOR = "sensor"
 CONF_STAT = "stat"
 CONF_PROFILE = "profile"
 
-CONF_BOILER = "boiler"
-# A switch that calls for heat: on while the radiators want the boiler, off
-# otherwise. When set, Hearth uses it instead of the boiler thermostat.
+# The one thing Hearth drives for the boiler: a switch that calls for heat,
+# on while the radiators want it and off otherwise. A relay, a thermostat's
+# own call-for-heat switch, an input_boolean: anything with on and off.
 CONF_BOILER_SWITCH = "boiler_switch"
-CONF_BOILER_ON = "boiler_on_temp"
-CONF_BOILER_OFF = "boiler_off_temp"
-CONF_FALLBACK = "fallback_temp"
 CONF_BOOST_TEMP = "boost_temp"
 CONF_BOOST_MINUTES = "boost_minutes"
 CONF_AWAY_TEMP = "away_temp"
@@ -61,9 +58,6 @@ CONF_OFF_DELAY = "demand_off_delay"
 CONF_PREHEAT_MAX = "preheat_max_minutes"
 
 DEFAULTS = {
-    CONF_BOILER_ON: 25.0,
-    CONF_BOILER_OFF: 10.0,
-    CONF_FALLBACK: 17.0,
     CONF_BOOST_TEMP: 22.0,
     CONF_BOOST_MINUTES: 60,
     CONF_AWAY_TEMP: 16.0,
@@ -85,11 +79,23 @@ EXTERNAL_REFRESH_SECONDS = 20 * 60
 # How far back the recorder is read for warm-ups when a room first learns.
 SEED_DAYS = 10
 
+# Settings Hearth keeps; anything else in an entry's options is from an older
+# version and is dropped when the entry is migrated.
+SETTINGS = (
+    CONF_BOILER_SWITCH, CONF_BOOST_TEMP, CONF_BOOST_MINUTES, CONF_AWAY_TEMP, CONF_HOLIDAY_TEMP,
+    CONF_OFF_TEMP, CONF_ON_DELAY, CONF_OFF_DELAY, CONF_PREHEAT_MAX, CONF_ZONES,
+)
+
+# After Hearth unloads (a reload, say), how long the call for heat is left as
+# it was for Hearth to come back, before it's turned off.
+HANDOVER_SECONDS = 30
+
 STORAGE_KEY = "hearth"
 STORAGE_VERSION = 1
 
 FRONTEND_URL = "/hearth_static"
 CARD_FILE = "hearth-card.js"
+COMMON_FILE = "hearth-common.js"
 
 SERVICE_SET_SCHEDULE = "set_schedule"
 SERVICE_BOOST = "boost"

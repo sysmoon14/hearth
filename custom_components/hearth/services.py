@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import voluptuous as vol
 
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ServiceValidationError
@@ -47,9 +48,12 @@ def _zones(hass: HomeAssistant, call: ServiceCall) -> list[Zone]:
         if entry is None or entry.platform != DOMAIN or entry.domain != "climate":
             raise ServiceValidationError(f"{entity_id} isn't a Hearth room")
         config_entry = hass.config_entries.async_get_entry(entry.config_entry_id)
-        hub = config_entry.runtime_data
+        if config_entry is None or config_entry.state is not ConfigEntryState.LOADED:
+            raise ServiceValidationError("Hearth isn't running")
         zone_id = entry.unique_id.removeprefix(f"{config_entry.entry_id}_")
-        zones.append(hub.zones[zone_id])
+        if (zone := config_entry.runtime_data.zones.get(zone_id)) is None:
+            raise ServiceValidationError(f"{entity_id} isn't a Hearth room any more")
+        zones.append(zone)
     return zones
 
 
