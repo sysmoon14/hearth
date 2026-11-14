@@ -48,3 +48,9 @@ cancel_boost:
           integration: hearth
           domain: climate
           multiple: true
+set_holiday:
+  fields:
+    until:
+      example: "2026-12-28 16:00:00"
+      selector:
+        datetime:

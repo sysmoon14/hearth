@@ -25,12 +25,15 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.const import ATTR_TEMPERATURE, STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import Context, HomeAssistant, State
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 
 from .const import (
     CONF_AWAY_TEMP,
     CONF_BOOST_MINUTES,
+    CONF_BOOST_MINUTES_UFH,
+    CONF_WARM_EARLY,
     CONF_BOOST_TEMP,
     CONF_HOLIDAY_TEMP,
     CONF_KIND,
@@ -92,6 +95,10 @@ STAT_SETTLE = 120
 # one write at a time, only the latest, and again if the stat hasn't taken it.
 STAT_RECHECK = 45
 STAT_TRIES = 3
+# A schedule that didn't reach the neoHub is sent again this often, this many
+# times, before it's left as a problem for someone to look at.
+SYNC_RETRY = 300
+SYNC_TRIES = 6
 # Away on a stat is a hold, and a hold runs out: it's set for this long and
 # set again well before it ends.
 AWAY_HOLD_MINUTES = 99 * 60
@@ -292,7 +299,9 @@ class Zone:
         house = self.hub.house_mode
         if house == HOUSE_HOLIDAY:
             temp = self._setting(CONF_HOLIDAY_TEMP)
-            return temp, f"Holiday Mode: kept above {_deg(temp)}"
+            back = self.hub.holiday_until
+            until = f" until {_when(back, now)}" if back else ""
+            return temp, f"Holiday: kept above {_deg(temp)}{until}"
         if self.boost_active(now):
             temp = self.state.boost_temp or self._setting(CONF_BOOST_TEMP)
             return temp, f"Boost to {_deg(temp)} until {_hhmm(self.state.boost_until)}"
@@ -317,6 +326,10 @@ class Zone:
 
     def preheating(self, now: datetime) -> bool:
         """Whether the room is warming up early for its next change."""
+        return False
+
+    def warms_early(self) -> bool:
+        """Whether a warmer change is reached by its time, not started then."""
         return False
 
     def update_demand(self, now: datetime) -> bool:
@@ -403,7 +416,12 @@ class Zone:
             if self.warm_rate() is None:
                 return f"{to} · still learning how long it takes"
             return to
-        return "Comfortable"
+        # Not heating: because it's warm enough, or (a valve offline, a stat
+        # that hasn't caught up) just not.
+        room, target = self.room_temp(), self.target()
+        if room is not None and target is not None and room < target - DEMAND_BELOW:
+            return "Not heating"
+        return "Up to temperature"
 
     # --- changing ---------------------------------------------------------
     async def async_set_mode(self, mode: str) -> None:
@@ -438,7 +456,9 @@ class Zone:
         await self._changed(sync=True)
 
     async def async_boost(self, minutes: int | None = None, temp: float | None = None) -> None:
-        minutes = int(minutes or self.hub.settings[CONF_BOOST_MINUTES])
+        if self.hub.house_mode == HOUSE_HOLIDAY:
+            raise ServiceValidationError("The house is on Holiday: switch to Home or Away to boost a room")
+        minutes = int(minutes or self.hub.settings[self._boost_setting])
         self.state.boost_until = dt_util.utcnow() + timedelta(minutes=minutes)
         self.state.boost_temp = _clamp(temp) if temp else None
         await self._start_boost(minutes)
@@ -457,6 +477,9 @@ class Zone:
         if sync:
             await self.async_sync()
         await self.hub.async_evaluate()
+
+    # How long a boost lasts unless told otherwise.
+    _boost_setting = CONF_BOOST_MINUTES
 
     # Hooks each kind fills in
     async def async_sync(self) -> None:
@@ -520,6 +543,8 @@ class Zone:
             "calling_for_heat": self.calling,
             "status": self.status(now),
             "preheating": self.preheating(now),
+            "warms_early": self.warms_early(),
+            "boost_minutes": int(self.hub.settings[self._boost_setting]),
             "minutes_to_target": round(m) if (m := self.minutes_to_target(now)) is not None else None,
             "warm_up_rate": round(rate, 2) if (rate := self.warm_rate()) is not None else None,
             "warm_ups": len(self.state.warmups),
@@ -558,6 +583,8 @@ class RadiatorZone(Zone):
         self._shut_since: datetime | None = None
         # Since when the room's sensor has had no reading to give.
         self._sensor_gone_since: float | None = None
+        # Turned off at the valve itself, not from Hearth.
+        self._off_at_valve = False
 
     def watched_entities(self) -> list[str]:
         return [*self.trvs, *super().watched_entities()]
@@ -641,7 +668,8 @@ class RadiatorZone(Zone):
         # stop the room warming in time for that change. Anything longer does.
         overridden = st.override_until is not None and now < st.override_until
         if (
-            st.mode != MODE_SCHEDULE
+            not self.warms_early()
+            or st.mode != MODE_SCHEDULE
             or self.hub.house_mode != HOUSE_HOME
             or self.boost_active(now)
             or (overridden and (upcoming is None or st.override_until != upcoming[0]))
@@ -658,6 +686,15 @@ class RadiatorZone(Zone):
             # Once started, keep going: as the room warms, the lead shrinks.
             self._early_for = at
         return temp, f"Warming up early for {_deg(temp)} by {_when(at, now)}"
+
+    def warms_early(self) -> bool:
+        return bool(self.config.get(CONF_WARM_EARLY, True)) and self._setting(CONF_PREHEAT_MAX) > 0
+
+    def _base(self, now: datetime) -> tuple[float, str]:
+        temp, reason = super()._base(now)
+        if self.state.mode == MODE_OFF and self._off_at_valve:
+            return temp, f"Off: turned off at the valve, kept above {_deg(temp)}"
+        return temp, reason
 
     def desired(self, now: datetime) -> tuple[float, str]:
         temp, reason = super().desired(now)
@@ -744,6 +781,16 @@ class RadiatorZone(Zone):
             return
         if new.context.id == self.context.id or new.context.parent_id == self.context.id:
             return
+        if new.state == "off" and old.state not in ("off", *BAD_STATES):
+            # Hearth never turns a valve off, so someone did, at the valve or
+            # in its app. The room follows, the way a stat's standby does,
+            # once every valve in it is off.
+            if self.state.mode != MODE_OFF and all(
+                (s := self.hass.states.get(e)) is not None and s.state == "off" for e in self.trvs
+            ):
+                _LOGGER.info("%s turned off at the valve", self.name)
+                self.hass.async_create_task(self._turned_off_at_valve())
+            return
         temp = _float(new.attributes.get(ATTR_TEMPERATURE))
         before = _float(old.attributes.get(ATTR_TEMPERATURE))
         sent = self._sent_target.get(entity_id)
@@ -755,8 +802,24 @@ class RadiatorZone(Zone):
         _LOGGER.debug("%s turned by hand to %s", entity_id, temp)
         self.hass.async_create_task(self.async_set_target(temp))
 
+    async def _turned_off_at_valve(self) -> None:
+        self.state.mode = MODE_OFF
+        self.state.override_temp = None
+        self.state.override_until = None
+        self._off_at_valve = True
+        await self._changed(sync=False)
+
+    async def async_set_mode(self, mode: str) -> None:
+        self._off_at_valve = False
+        await super().async_set_mode(mode)
+
     async def async_set_target(self, temp: float) -> None:
         self._sent_target.clear()  # the next push is a fresh command
+        if self._off_at_valve and self.state.mode == MODE_OFF:
+            # Turned off at the valve, and now turned up there (or on a
+            # card): the room is back on its schedule, at what was asked.
+            self._off_at_valve = False
+            self.state.mode = MODE_SCHEDULE
         await super().async_set_target(temp)
 
     async def async_start(self) -> None:
@@ -796,11 +859,21 @@ class UnderfloorZone(Zone):
     kind = KIND_UNDERFLOOR
     _own_reading = "stat"
     _own_words = "the stat's"
+    _boost_setting = CONF_BOOST_MINUTES_UFH
+
+    def warms_early(self) -> bool:
+        return True  # the stat's own optimum start
 
     def problem(self) -> str | None:
         state = self._stat_state
         if state is None or state.state in BAD_STATES:
             return "The thermostat is offline"
+        if self._sync_failed:
+            return "The schedule hasn't reached the thermostat"
+        if self.state.mode != MODE_OFF and not self.syncing and not self._settling and not self.in_standby:
+            running = self.hass.states.get(select) if (select := self.select) else None
+            if running is not None and running.state not in BAD_STATES and running.state != self._profile_for_mode():
+                return f"The thermostat is running “{running.state}”, not Hearth's schedule"
         return super().problem()
 
     def __init__(self, hub: Hearth, config: dict[str, Any], state: ZoneState) -> None:
@@ -818,6 +891,11 @@ class UnderfloorZone(Zone):
         # background, once more if something changed meanwhile.
         self._syncing: asyncio.Task | None = None
         self._sync_again = False
+        # The last write didn't get there; when it was tried, and how often since.
+        self._sync_failed = False
+        self._sync_tried_at = 0.0
+        self._sync_tries = 0
+        self._found: dict[tuple[str, str, bool], str] = {}
         # Turned off on the stat itself, not from Hearth.
         self._off_on_stat = False
 
@@ -921,7 +999,10 @@ class UnderfloorZone(Zone):
         return self.profile
 
     def _registry_find(self, domain: str, suffix: str, same_device: bool) -> str | None:
+        key = (domain, suffix, same_device)
         registry = er.async_get(self.hass)
+        if (known := self._found.get(key)) and registry.async_get(known) is not None:
+            return known
         stat = registry.async_get(self.stat)
         if stat is None:
             return None
@@ -931,6 +1012,7 @@ class UnderfloorZone(Zone):
             if same_device and entry.device_id != stat.device_id:
                 continue
             if entry.entity_id.endswith(suffix):
+                self._found[key] = entry.entity_id
                 return entry.entity_id
         return None
 
@@ -969,41 +1051,48 @@ class UnderfloorZone(Zone):
     async def async_sync(self) -> None:
         """Write the profile for the current mode and make the stat run it,
         in the background: the neoHub can take a minute."""
+        self._sync_tries = 0  # asked for afresh: any retries start over
+        self._start_sync()
+
+    def _start_sync(self) -> None:
         self._sent()
         self._sync_again = True
         if not self.syncing:
             self._syncing = self.hass.async_create_task(self._sync_loop(), f"hearth {self.id} profile")
 
     async def _sync_loop(self) -> None:
+        ok = False
         try:
             while self._sync_again:
                 self._sync_again = False
-                await self._sync_now()
+                ok = await self._sync_now()
         finally:
             self._syncing = None
+            self._sync_failed, self._sync_tried_at = not ok, monotonic.monotonic()
             if not self.hub.stopped:
                 await self.hub.async_evaluate()
 
-    async def _sync_now(self) -> None:
-        """Off is the stat's own standby, which keeps frost protection."""
+    async def _sync_now(self) -> bool:
+        """Off is the stat's own standby, which keeps frost protection.
+        Says whether the stat ended up with what was sent."""
         self._sent()
         if self.state.mode == MODE_OFF:
             if not self.in_standby:
-                await self._call("climate", "set_preset_mode", {"entity_id": self.stat, "preset_mode": "standby"})
-            return
+                return await self._call("climate", "set_preset_mode", {"entity_id": self.stat, "preset_mode": "standby"})
+            return True
         if self.in_standby:
             await self._call("climate", "set_preset_mode", {"entity_id": self.stat, "preset_mode": "home"})
         sensor, select = self.profile_sensor, self.select
         if not sensor or not select:
             _LOGGER.warning("%s: can't find the neoHub's profile entities", self.name)
-            return
+            return False
         levels, name = self._levels()
         ok = await self._call(
             "heatmiserneo", "create_profile_two",
             {"entity_id": sensor, "name": name, "mode": "upsert", **levels},
         )
         if not ok:
-            return
+            return False
         await self._call("homeassistant", "update_entity", {"entity_id": select})
         for _ in range(30):
             options = (self.hass.states.get(select) or State(select, "")).attributes.get("options") or []
@@ -1013,9 +1102,9 @@ class UnderfloorZone(Zone):
             await self._call("homeassistant", "update_entity", {"entity_id": select})
         else:
             _LOGGER.warning("%s: profile %s didn't appear on the neoHub", self.name, name)
-            return
+            return False
         # Selecting it again is what makes the stat pick up new levels.
-        await self._call("select", "select_option", {"entity_id": select, "option": name})
+        return await self._call("select", "select_option", {"entity_id": select, "option": name})
 
     async def _override(self, temp: float) -> None:
         """The stat's own setpoint lasts until its next level: exactly an
@@ -1044,6 +1133,13 @@ class UnderfloorZone(Zone):
         await super().async_tick(now)
         if not self.syncing:
             await self._keep_away(now)
+        if (
+            self._sync_failed and not self.syncing and self._sync_tries < SYNC_TRIES
+            and monotonic.monotonic() - self._sync_tried_at >= SYNC_RETRY
+        ):
+            self._sync_tries += 1
+            _LOGGER.info("%s: sending its schedule to the thermostat again (%s of %s)", self.name, self._sync_tries, SYNC_TRIES)
+            self._start_sync()
         if self._want is None:
             return
         state = self._stat_state
@@ -1124,6 +1220,15 @@ class UnderfloorZone(Zone):
                 self._off_on_stat = True
                 self.hub.async_save()
             return
+        stat = self._stat_state
+        if (
+            self.state.mode == MODE_OFF and not self.boost_active(dt_util.utcnow())
+            and stat is not None and stat.state not in BAD_STATES and stat.attributes.get("preset_mode")
+        ):
+            # Off when Hearth last ran, but the stat is on now: it was turned
+            # back on at the stat meanwhile, and the room follows.
+            self.state.mode = MODE_SCHEDULE
+            self.hub.async_save()
         select = self.select
         state = self.hass.states.get(select) if select else None
         if state is None or state.state in BAD_STATES:

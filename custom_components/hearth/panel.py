@@ -25,6 +25,7 @@ from .const import (
     CONF_AWAY_TEMP,
     CONF_BOILER_SWITCH,
     CONF_BOOST_MINUTES,
+    CONF_BOOST_MINUTES_UFH,
     CONF_BOOST_TEMP,
     CONF_HOLIDAY_TEMP,
     CONF_KIND,
@@ -37,6 +38,7 @@ from .const import (
     CONF_SENSOR,
     CONF_STAT,
     CONF_TRVS,
+    CONF_WARM_EARLY,
     CONF_ZONE_ID,
     CONF_ZONES,
     DEFAULTS,
@@ -55,7 +57,7 @@ TEMPS = {
     CONF_BOOST_TEMP: (15, 28), CONF_AWAY_TEMP: (5, 22), CONF_HOLIDAY_TEMP: (5, 18), CONF_OFF_TEMP: (5, 15),
 }
 SECONDS = {CONF_ON_DELAY: (0, 900), CONF_OFF_DELAY: (0, 1800), CONF_BOOST_MINUTES: (15, 240),
-           CONF_PREHEAT_MAX: (0, 360)}
+           CONF_BOOST_MINUTES_UFH: (30, 480), CONF_PREHEAT_MAX: (0, 360)}
 OPTIONAL_ENTITIES = (CONF_BOILER_SWITCH,)
 SWITCH_DOMAINS = ("switch", "input_boolean")
 
@@ -118,6 +120,7 @@ def _info(hass: HomeAssistant, entry: ConfigEntry, is_admin: bool) -> dict[str, 
             "sensor": zone.get(CONF_SENSOR),
             "stat": zone.get(CONF_STAT),
             "profile": zone.get(CONF_PROFILE),
+            "warm_early": bool(zone.get(CONF_WARM_EARLY, True)),
             "schedule": running.state.schedule if running else None,
         })
     return {
@@ -127,6 +130,7 @@ def _info(hass: HomeAssistant, entry: ConfigEntry, is_admin: bool) -> dict[str, 
         "is_admin": is_admin,
         "rooms": rooms,
         "settings": {k: options.get(k) for k in (*OPTIONAL_ENTITIES, *TEMPS, *SECONDS)},
+        "holiday_until": hub.holiday_until.isoformat() if hub and hub.holiday_until else None,
         "house_mode": _own(hass, entry, "house_mode", "select"),
         "demand": _own(hass, entry, "radiator_demand", "binary_sensor"),
         "last_boiler_command": hub.last_boiler_command if hub else None,
@@ -162,7 +166,28 @@ ROOM = vol.Schema({
     vol.Optional("sensor"): vol.Any(None, cv.entity_id),
     vol.Optional("stat"): vol.Any(None, cv.entity_id),
     vol.Optional("profile"): vol.Any(None, vol.All(str, vol.Strip, vol.Length(max=40))),
+    vol.Optional("warm_early", default=True): bool,
 })
+
+
+def _device_trouble(hass: HomeAssistant, zones: list[dict[str, Any]], room: dict[str, Any], keep: str | None) -> str | None:
+    """Why a room's valves or stat can't be used, or None when they can: a
+    valve has to be a valve, and a device heats one room."""
+    registry = er.async_get(hass)
+    devices = room["trvs"] if room["kind"] == KIND_RADIATOR else [room.get("stat")]
+    if len(set(devices)) != len(devices):
+        return "The same valve is listed twice"
+    for entity_id in devices:
+        entry = registry.async_get(entity_id)
+        platform = entry.platform if entry else None
+        if platform == DOMAIN:
+            return f"{entity_id} is a Hearth room, not a valve or a stat"
+        if room["kind"] == KIND_RADIATOR and platform == "heatmiserneo":
+            return f"{entity_id} is a Heatmiser stat: add it as an underfloor room"
+        for other in zones:
+            if other[CONF_ZONE_ID] != keep and entity_id in [*(other.get(CONF_TRVS) or []), other.get(CONF_STAT)]:
+                return f"{entity_id} already heats {other[CONF_NAME]}"
+    return None
 
 
 @websocket_api.websocket_command({vol.Required("type"): "hearth/save_room", vol.Required("room"): ROOM})
@@ -186,12 +211,17 @@ def ws_save_room(hass: HomeAssistant, connection: websocket_api.ActiveConnection
     if room["kind"] == KIND_UNDERFLOOR and not room.get("stat"):
         connection.send_error(msg["id"], websocket_api.ERR_INVALID_FORMAT, "An underfloor room needs its stat")
         return
+    if trouble := _device_trouble(hass, zones, room, keep):
+        connection.send_error(msg["id"], websocket_api.ERR_INVALID_FORMAT, trouble)
+        return
     zone: dict[str, Any] = {CONF_ZONE_ID: keep or _unique_id(zones, room["name"], None),
                             CONF_KIND: room["kind"], CONF_NAME: room["name"]}
     if room.get("sensor"):
         zone[CONF_SENSOR] = room["sensor"]
     if room["kind"] == KIND_RADIATOR:
         zone[CONF_TRVS] = room["trvs"]
+        if not room["warm_early"]:
+            zone[CONF_WARM_EARLY] = False
     else:
         zone[CONF_STAT] = room["stat"]
         zone[CONF_PROFILE] = room.get("profile") or f"Hearth {room['name']}"

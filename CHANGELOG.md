@@ -3,6 +3,9 @@
 ## 1.0.0b4
 
 **When something's wrong**
+- A problem that lasts a quarter of an hour is raised as a repair in Home Assistant (Settings → Repairs), so a dead valve or a silent sensor is seen without opening Hearth. It clears by itself when the problem does.
+- A schedule that doesn't reach a Heatmiser stat is sent again every five minutes, up to six times, and the room says "The schedule hasn't reached the thermostat" meanwhile. A stat running some other profile says so too.
+- If Hearth can't start, it turns the Call for heat switch off instead of leaving it as it was.
 - Every room has a `problem` attribute, shown in amber on the card and the panel: "Can't heat: the valve is offline", "A valve is offline", "The thermostat is offline", or "The room sensor isn't reporting: using the valve's own reading".
 - A radiator room with no valve online stops asking for heat, so the boiler doesn't fire for a radiator that can't open.
 - One room going wrong no longer stops the others being set or the Call for heat switch being turned off. Hearth looks at the house one pass at a time.

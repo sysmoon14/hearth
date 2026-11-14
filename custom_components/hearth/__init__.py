@@ -62,7 +62,12 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_setup_entry(hass: HomeAssistant, entry: HearthConfigEntry) -> bool:
     hub = Hearth(hass, entry)
     entry.runtime_data = hub
-    await hub.async_start()
+    try:
+        await hub.async_start()
+    except Exception:
+        _LOGGER.exception("Hearth couldn't start; turning the call for heat off")
+        await hub.async_fail_safe()
+        raise
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     _remove_old_rooms(hass, entry)
     await panel.async_show(hass)

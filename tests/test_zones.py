@@ -317,7 +317,7 @@ async def test_every_room_says_how_long_it_will_take(hass: HomeAssistant, house,
     async_fire_time_changed(hass)
     await hass.async_block_till_done()
     room = hass.states.get(ROOM)
-    assert room.attributes["status"] == "Comfortable"
+    assert room.attributes["status"] == "Up to temperature"
     assert room.attributes["minutes_to_target"] is None
 
     await hass.services.async_call("climate", "set_hvac_mode", {"entity_id": ROOM, "hvac_mode": "off"}, blocking=True)
@@ -526,12 +526,12 @@ async def test_plus_during_an_underfloor_boost_changes_the_hold(hass: HomeAssist
     await _setup(hass, calls, [KITCHEN_ZONE])
     room = "climate.kitchen_2"
     await hass.services.async_call("hearth", "boost", {"entity_id": room}, blocking=True)
-    assert calls.of("heatmiserneo", "hold_on")[-1]["hold_duration"] == "01:00:00"
+    assert calls.of("heatmiserneo", "hold_on")[-1]["hold_duration"] == "02:00:00"  # a floor's boost is longer
     await _tick(hass, freezer, minutes=20)
     await hass.services.async_call("climate", "set_temperature", {"entity_id": room, "temperature": 23.5}, blocking=True)
     hold = calls.of("heatmiserneo", "hold_on")[-1]
     assert hold["hold_temperature"] == 23.5
-    assert hold["hold_duration"] == "00:40:00"  # what's left of the boost
+    assert hold["hold_duration"] == "01:40:00"  # what's left of the boost
     state = hass.states.get(room)
     assert state.attributes["reason"].startswith("Boost to 23.5°")
     assert state.attributes["temperature"] == 23.5
@@ -653,7 +653,7 @@ async def test_boosting_an_underfloor_room_thats_off(hass: HomeAssistant, house,
     assert state.state == "off" and state.attributes["preset_mode"] == "boost"
 
     # And goes back when the boost runs out: the room is still Off.
-    await _tick(hass, freezer, minutes=61)
+    await _tick(hass, freezer, minutes=121)
     assert hass.states.get(KITCHEN).attributes["preset_mode"] == "standby"
     state = hass.states.get(room)
     assert state.state == "off" and state.attributes["status"] == "Off"
@@ -681,4 +681,124 @@ async def test_one_room_going_wrong_doesnt_stop_the_house(hass: HomeAssistant, h
     # The office warms up: the boiler is still turned off.
     _sensor(hass, "19.5")
     await _tick(hass, freezer, seconds=35)
+    assert hass.states.get(RELAY).state == "off"
+
+
+async def test_a_schedule_that_doesnt_reach_the_stat_is_sent_again(hass: HomeAssistant, house, calls, freezer) -> None:
+    from homeassistant.exceptions import HomeAssistantError
+
+    freezer.move_to(dt_util.as_utc(dt_util.parse_datetime("2026-11-13T12:00:00+00:00")))
+    await _setup(hass, calls, [KITCHEN_ZONE])
+    room = "climate.kitchen_2"
+    down = {"yes": True}
+
+    async def create(call):
+        if down["yes"]:
+            raise HomeAssistantError("the neoHub didn't answer")
+        calls.log.append(("heatmiserneo", "create_profile_two", dict(call.data)))
+
+    hass.services.async_register("heatmiserneo", "create_profile_two", create)
+    await hass.services.async_call("climate", "set_hvac_mode", {"entity_id": room, "hvac_mode": "heat"}, blocking=True)
+    await hass.async_block_till_done()
+    assert hass.states.get(room).attributes["problem"] == "The schedule hasn't reached the thermostat"
+
+    # The neoHub is back: Hearth sends it again without being asked.
+    down["yes"] = False
+    await _tick(hass, freezer, minutes=6)
+    await hass.async_block_till_done()
+    assert calls.of("heatmiserneo", "create_profile_two")[-1]["name"] == "HA Kitchen Fixed"
+    await _tick(hass, freezer, minutes=3)
+    assert hass.states.get(room).attributes["problem"] is None
+
+
+async def test_a_valve_turned_off_at_the_valve(hass: HomeAssistant, house, calls, freezer) -> None:
+    freezer.move_to(dt_util.as_utc(dt_util.parse_datetime("2026-11-13T07:30:00+00:00")))
+    await _setup(hass, calls, [OFFICE])
+    await _tick(hass, freezer, minutes=2)
+    valve = hass.states.get(OFFICE_TRV)
+    hass.states.async_set(OFFICE_TRV, "off", valve.attributes)
+    await hass.async_block_till_done()
+    state = hass.states.get(ROOM)
+    assert state.state == "off"
+    assert state.attributes["reason"] == "Off: turned off at the valve, kept above 7°"
+    assert hass.states.get(RELAY).state == "off"
+
+    # Turned up at the valve again: back on its schedule, at what was asked.
+    await _tick(hass, freezer, minutes=2)
+    valve = hass.states.get(OFFICE_TRV)
+    hass.states.async_set(OFFICE_TRV, "heat", {**valve.attributes, "temperature": 20.0})
+    await hass.async_block_till_done()
+    state = hass.states.get(ROOM)
+    assert state.state == "auto" and state.attributes["temperature"] == 20.0
+
+
+async def test_a_holiday_ends_by_itself_and_stops_boosts(hass: HomeAssistant, house, calls, freezer) -> None:
+    import pytest
+    from homeassistant.exceptions import ServiceValidationError
+
+    freezer.move_to(dt_util.as_utc(dt_util.parse_datetime("2026-11-13T12:00:00+00:00")))
+    await _setup(hass, calls, [OFFICE])
+    await hass.services.async_call("hearth", "boost", {"entity_id": ROOM}, blocking=True)
+    await hass.services.async_call("hearth", "set_holiday", {"until": "2026-11-15 16:00:00"}, blocking=True)
+    state = hass.states.get(ROOM)
+    assert state.attributes["preset_mode"] == "none"  # the boost ended with the holiday starting
+    assert state.attributes["reason"] == "Holiday: kept above 10° until Sun 16:00"
+    assert hass.states.get("select.hearth_house_mode").attributes["holiday_until"].startswith("2026-11-15T16:00")
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call("hearth", "boost", {"entity_id": ROOM}, blocking=True)
+
+    freezer.move_to(dt_util.as_utc(dt_util.parse_datetime("2026-11-15T16:00:40+00:00")))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert hass.states.get("select.hearth_house_mode").state == "home"
+    assert hass.states.get("select.hearth_house_mode").attributes["holiday_until"] is None
+
+
+async def test_a_problem_that_lasts_is_raised_as_a_repair(hass: HomeAssistant, house, calls, freezer) -> None:
+    from homeassistant.helpers import issue_registry as ir
+
+    freezer.move_to(dt_util.as_utc(dt_util.parse_datetime("2026-11-13T07:30:00+00:00")))
+    await _setup(hass, calls, [OFFICE])
+    issues = ir.async_get(hass)
+    valve = hass.states.get(OFFICE_TRV)
+    hass.states.async_set(OFFICE_TRV, "unavailable")
+    await _tick(hass, freezer, minutes=5)
+    assert issues.async_get_issue("hearth", "room_office") is None  # a blip isn't a repair
+    await _tick(hass, freezer, minutes=16)
+    issue = issues.async_get_issue("hearth", "room_office")
+    assert issue is not None and issue.translation_placeholders["problem"] == "Can't heat: the valve is offline"
+    hass.states.async_set(OFFICE_TRV, valve.state, valve.attributes)
+    await _tick(hass, freezer, seconds=35)
+    assert issues.async_get_issue("hearth", "room_office") is None
+
+
+async def test_a_room_can_opt_out_of_starting_early(hass: HomeAssistant, house, calls, freezer) -> None:
+    from custom_components.hearth.preheat import WarmUp
+
+    freezer.move_to(dt_util.as_utc(dt_util.parse_datetime("2026-11-13T15:30:00+00:00")))
+    entry = await _setup(hass, calls, [{**OFFICE, "warm_early": False}])
+    zone = entry.runtime_data.zones["office"]
+    await zone.async_set_schedule({"weekdays": [{"time": "09:00", "temp": 16}, {"time": "17:00", "temp": 21}],
+                                   "weekends": [{"time": "09:00", "temp": 16}]})
+    for n in range(3):
+        zone.learn(WarmUp(2, 60, dt_util.utcnow() - timedelta(days=n + 1), "seen"))
+    await _tick(hass, freezer, seconds=35)
+    state = hass.states.get(ROOM)
+    assert state.attributes["warms_early"] is False
+    assert state.attributes["preheating"] is False and state.attributes["temperature"] == 16
+
+
+async def test_hearth_failing_to_start_turns_the_switch_off(hass: HomeAssistant, house, calls, freezer) -> None:
+    from unittest.mock import patch
+    from homeassistant.setup import async_setup_component
+
+    hass.states.async_set(RELAY, "on")
+    entry = hearth_entry(hass, [OFFICE])
+    assert await async_setup_component(hass, "climate", {})
+    assert await async_setup_component(hass, "select", {})
+    calls.patch_climate()
+    with patch("custom_components.hearth.zone.RadiatorZone.async_start", side_effect=None), \
+         patch("custom_components.hearth.hub.Hearth.async_evaluate", side_effect=RuntimeError("broken")):
+        assert not await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
     assert hass.states.get(RELAY).state == "off"

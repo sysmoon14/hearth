@@ -9,7 +9,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import HearthConfigEntry
-from .const import CONF_BOOST_MINUTES, CONF_BOOST_TEMP, HOUSE_MODES
+from .const import CONF_AWAY_TEMP, CONF_BOOST_MINUTES, CONF_BOOST_TEMP, CONF_HOLIDAY_TEMP, HOUSE_MODES
 from .entity import HearthEntity, house_device
 
 
@@ -41,6 +41,9 @@ class HouseMode(HearthEntity, SelectEntity):
         return {
             "boost_minutes": int(self.hub.settings[CONF_BOOST_MINUTES]),
             "boost_temp": float(self.hub.settings[CONF_BOOST_TEMP]),
+            "away_temp": float(self.hub.settings[CONF_AWAY_TEMP]),
+            "holiday_temp": float(self.hub.settings[CONF_HOLIDAY_TEMP]),
+            "holiday_until": self.hub.holiday_until.isoformat() if self.hub.holiday_until else None,
         }
 
     async def async_select_option(self, option: str) -> None:

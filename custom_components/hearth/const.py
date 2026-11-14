@@ -48,6 +48,10 @@ CONF_PROFILE = "profile"
 CONF_BOILER_SWITCH = "boiler_switch"
 CONF_BOOST_TEMP = "boost_temp"
 CONF_BOOST_MINUTES = "boost_minutes"
+# A floor takes far longer to answer than a radiator, so its boost runs longer.
+CONF_BOOST_MINUTES_UFH = "boost_minutes_underfloor"
+# Per room: whether a radiator room starts early for a warmer change.
+CONF_WARM_EARLY = "warm_early"
 CONF_AWAY_TEMP = "away_temp"
 CONF_HOLIDAY_TEMP = "holiday_temp"
 CONF_OFF_TEMP = "off_temp"
@@ -60,6 +64,7 @@ CONF_PREHEAT_MAX = "preheat_max_minutes"
 DEFAULTS = {
     CONF_BOOST_TEMP: 22.0,
     CONF_BOOST_MINUTES: 60,
+    CONF_BOOST_MINUTES_UFH: 120,
     CONF_AWAY_TEMP: 16.0,
     CONF_HOLIDAY_TEMP: 10.0,
     CONF_OFF_TEMP: 7.0,
@@ -103,7 +108,7 @@ SEED_DAYS = 10
 # Settings Hearth keeps; anything else in an entry's options is from an older
 # version and is dropped when the entry is migrated.
 SETTINGS = (
-    CONF_BOILER_SWITCH, CONF_BOOST_TEMP, CONF_BOOST_MINUTES, CONF_AWAY_TEMP, CONF_HOLIDAY_TEMP,
+    CONF_BOILER_SWITCH, CONF_BOOST_TEMP, CONF_BOOST_MINUTES, CONF_BOOST_MINUTES_UFH, CONF_AWAY_TEMP, CONF_HOLIDAY_TEMP,
     CONF_OFF_TEMP, CONF_ON_DELAY, CONF_OFF_DELAY, CONF_PREHEAT_MAX, CONF_ZONES,
 )
 
@@ -124,6 +129,11 @@ COMMON_FILE = "hearth-common.js"
 SERVICE_SET_SCHEDULE = "set_schedule"
 SERVICE_BOOST = "boost"
 SERVICE_CANCEL_BOOST = "cancel_boost"
+SERVICE_SET_HOLIDAY = "set_holiday"
+
+# A problem that lasts this long is raised as a repair in Home Assistant, so
+# it's seen without opening Hearth. Shorter ones are restarts and blips.
+PROBLEM_AFTER_SECONDS = 15 * 60
 
 DEFAULT_SCHEDULE = {
     WEEKDAYS: [

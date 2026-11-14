@@ -102,9 +102,27 @@ export function targetLabel(stateObj) {
 export const problemOf = (stateObj) => stateObj?.attributes?.problem || "";
 // Off, and not boosted out of it: there's no temperature to turn up or down.
 export const isOff = (stateObj) => stateObj?.state === "off" && stateObj?.attributes?.preset_mode !== "boost";
-export function boostLabel(house) {
-  const m = Number(house?.attributes?.boost_minutes) || 60;
-  return m % 60 === 0 ? `${m / 60} h` : `${m} min`;
+// What a room's Boost button does: "22° · 1 h". A room knows how long its
+// own boost lasts (a floor's is longer than a radiator's).
+export function boostLabel(house, stateObj) {
+  const m = Number(stateObj?.attributes?.boost_minutes) || Number(house?.attributes?.boost_minutes) || 60;
+  const length = m % 60 === 0 ? `${m / 60} h` : `${m} min`;
+  const temp = num(house?.attributes?.boost_temp);
+  return temp === null ? length : `${deg(temp)} · ${length}`;
+}
+// While the house is Away or on Holiday a tap on − or + wouldn't show (the
+// house's temperature wins), so they're switched off, with the reason.
+export function houseLock(house, stateObj) {
+  const mode = house?.state;
+  if (mode === "holiday") return `On Holiday${house.attributes?.holiday_temp != null ? `, kept above ${deg(house.attributes.holiday_temp)}` : ""}. Switch to Home to change a room.`;
+  if (mode === "away" && stateObj?.attributes?.preset_mode !== "boost") return `Away${house.attributes?.away_temp != null ? `, no warmer than ${deg(house.attributes.away_temp)}` : ""}. Boost the room, or switch to Home to change it.`;
+  return "";
+}
+export function holidayBack(house) {
+  const until = house?.attributes?.holiday_until;
+  if (house?.state !== "holiday" || !until) return "";
+  const d = new Date(until);
+  return `back ${d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })} ${d.toTimeString().slice(0, 5)}`;
 }
 
 // --- the schedule editor ------------------------------------------------------
@@ -216,7 +234,7 @@ class HearthScheduleEditor extends HTMLElement {
         <span class="small ${n >= MAX_CHANGES ? "warn" : "muted"}">${n} of ${MAX_CHANGES} changes</span>
       </div>
       <div class="stack tight">${stripHtml(dayBlocks(list), { tall: true })}${TICKS}</div>
-      <span class="muted small">From each time, the room aims for that temperature until the next change. Before the day's first change, the night before's last one carries on.${carryNote}</span>
+      <span class="muted small">From each time, the room aims for that temperature until the next change. Before the day's first change, the night before's last one carries on.${carryNote}${st?.attributes?.warms_early ? " The room starts warming early, so it's already at a warmer change's temperature by its time." : ""}</span>
       <div class="stack tight">${list.map((c, i) => `<div class="change">
         <span class="swatch" style="background:${tempColour(c.temp)}"></span>
         <label class="muted">From <input type="time" value="${esc(c.time)}" data-time="${i}"></label>
@@ -276,7 +294,13 @@ class HearthScheduleEditor extends HTMLElement {
       case "add": {
         if (list.length >= MAX_CHANGES) break;
         const t = Math.min(1410, (list.length ? mins(list[list.length - 1].time) : 360) + 60);
-        list.push({ time: hhmm(t), temp: list.length ? list[list.length - 1].temp : 19 });
+        // A change to the same temperature would do nothing: offer the day's
+        // other temperature, the way a day goes warm, cool, warm, cool.
+        const temps = list.map((c) => c.temp);
+        const last = temps.length ? temps[temps.length - 1] : null;
+        const hi = Math.max(...temps), lo = Math.min(...temps);
+        const temp = last === null ? 19 : last !== hi ? hi : lo !== hi ? lo : clamp(last + (last >= 19 ? -3 : 3));
+        list.push({ time: hhmm(t), temp });
         this._set(list);
         break;
       }
