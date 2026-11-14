@@ -439,8 +439,15 @@ class RadiatorZone(Zone):
             return
         start, start_temp, aim = self._warming
         minutes = (now - start).total_seconds() / 60
-        if target != aim or minutes > preheat.MAX_MINUTES:
-            self._warming = None  # aimed somewhere else part way: not a clean warm-up
+        if minutes > preheat.MAX_MINUTES:
+            self._warming = None  # something else was going on: a window open, a valve shut
+            return
+        if target != aim:
+            # The target moved before the room got there (a schedule change,
+            # a tap on − or +). How far it rose so far is still a fair measure.
+            if preheat.counts(room - start_temp, minutes):
+                self.learn(WarmUp(room - start_temp, minutes, start, "seen"))
+            self._warming = (now, room, target) if self.calling else None
             return
         if not self.calling:
             self._warming = None

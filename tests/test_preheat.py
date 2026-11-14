@@ -197,3 +197,28 @@ async def test_a_room_on_its_valves_reading_learns_but_isnt_seeded(hass: HomeAss
     await _tick(hass, freezer, "2026-11-13T07:30:30+00:00")
     assert [(round(w.rise, 1), w.minutes, w.source) for w in zone.state.warmups] == [(3.3, 30.0, "seen")]
     assert hass.states.get(ROOM).attributes["warm_ups"] == 1
+
+
+async def test_a_warm_up_cut_short_by_the_schedule_still_counts(hass: HomeAssistant, house, calls, freezer) -> None:
+    # 19° from 07:00 to 10:00; the room only gets to 17.5° before it drops to 16°.
+    freezer.move_to(dt_util.as_utc(dt_util.parse_datetime("2026-11-13T06:59:00+00:00")))
+    hass.states.async_set(OFFICE_SENSOR, "16.0")
+    entry = await _setup(hass, calls, [OFFICE])
+    zone = entry.runtime_data.zones["office"]
+    await _tick(hass, freezer, "2026-11-13T07:00:30+00:00")
+    assert hass.states.get(ROOM).attributes["calling_for_heat"]
+
+    hass.states.async_set(OFFICE_SENSOR, "17.5")
+    await _tick(hass, freezer, "2026-11-13T09:00:00+00:00")
+    assert zone.state.warmups == []  # still on its way
+
+    await _tick(hass, freezer, "2026-11-13T10:00:30+00:00")
+    assert not hass.states.get(ROOM).attributes["calling_for_heat"]
+    assert [(w.rise, w.minutes, w.source) for w in zone.state.warmups] == [(1.5, 180.0, "seen")]
+
+    # A rise too small to tell anything is still left out.
+    hass.states.async_set(OFFICE_SENSOR, "16.0")
+    await _tick(hass, freezer, "2026-11-13T17:00:30+00:00")  # 19° again
+    hass.states.async_set(OFFICE_SENSOR, "16.3")
+    await _tick(hass, freezer, "2026-11-13T23:00:30+00:00")  # 16° at 23:00
+    assert len(zone.state.warmups) == 1
