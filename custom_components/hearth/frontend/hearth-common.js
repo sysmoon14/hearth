@@ -2,7 +2,7 @@
 // edits the same way wherever it's shown: the words for what a room is doing,
 // the colours for temperatures, a day's blocks, and the schedule editor.
 
-export const VERSION = "1.0.0b3";
+export const VERSION = "1.0.0b4";
 export const MAX_CHANGES = 6;
 export const DAYS = [["weekdays", "Weekdays · Mon–Fri"], ["weekends", "Weekends · Sat–Sun"]];
 
@@ -69,7 +69,7 @@ export const TICKS = `<div class="ticks"><span>00:00</span><span>06:00</span><sp
 export const STRIP_STYLE = `
 .strip{position:relative;flex:1 1 auto;height:30px;display:flex;border-radius:8px;overflow:hidden}
 .strip.tall{height:64px;border-radius:10px}
-.strip i{position:absolute;top:0;bottom:0;width:2px;background:var(--primary-text-color)}
+.strip i{position:absolute;top:0;bottom:0;width:2px;background:var(--primary-text-color);box-shadow:0 0 0 1px var(--card-background-color,#fff)}
 .block{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;color:#1b1b1b;font-size:12px;font-weight:500;border-right:1px solid var(--card-background-color,#fff);overflow:hidden;white-space:nowrap}
 .strip.tall .block{font-size:16px;border-right-width:2px}
 .block .span{font-size:11px;font-weight:400;opacity:.8}
@@ -93,12 +93,36 @@ export function targetLabel(stateObj) {
   if (a.preset_mode === "boost") return a.boost_until ? `boost until ${clock(a.boost_until)}` : "boost";
   if (stateObj?.state === "off") return "off";
   if (stateObj?.state === "heat") return "fixed";
+  // Warming up early: the target is the next change's, wanted by its time.
+  if (a.preheating && a.next_change_at) return `by ${clock(a.next_change_at)}`;
   if (a.override_until) return `until ${clock(a.override_until)}`;
   return a.next_change_at ? `until ${clock(a.next_change_at)}` : "on schedule";
 }
-export function boostLabel(house) {
-  const m = Number(house?.attributes?.boost_minutes) || 60;
-  return m % 60 === 0 ? `${m / 60} h` : `${m} min`;
+// Something wrong with the room's devices, in Hearth's words, or "".
+export const problemOf = (stateObj) => stateObj?.attributes?.problem || "";
+// Off, and not boosted out of it: there's no temperature to turn up or down.
+export const isOff = (stateObj) => stateObj?.state === "off" && stateObj?.attributes?.preset_mode !== "boost";
+// What a room's Boost button does: "22° · 1 h". A room knows how long its
+// own boost lasts (a floor's is longer than a radiator's).
+export function boostLabel(house, stateObj) {
+  const m = Number(stateObj?.attributes?.boost_minutes) || Number(house?.attributes?.boost_minutes) || 60;
+  const length = m % 60 === 0 ? `${m / 60} h` : `${m} min`;
+  const temp = num(house?.attributes?.boost_temp);
+  return temp === null ? length : `${deg(temp)} · ${length}`;
+}
+// While the house is Away or on Holiday a tap on − or + wouldn't show (the
+// house's temperature wins), so they're switched off, with the reason.
+export function houseLock(house, stateObj) {
+  const mode = house?.state;
+  if (mode === "holiday") return `On Holiday${house.attributes?.holiday_temp != null ? `, kept above ${deg(house.attributes.holiday_temp)}` : ""}. Switch to Home to change a room.`;
+  if (mode === "away" && stateObj?.attributes?.preset_mode !== "boost") return `Away${house.attributes?.away_temp != null ? `, no warmer than ${deg(house.attributes.away_temp)}` : ""}. Boost the room, or switch to Home to change it.`;
+  return "";
+}
+export function holidayBack(house) {
+  const until = house?.attributes?.holiday_until;
+  if (house?.state !== "holiday" || !until) return "";
+  const d = new Date(until);
+  return `back ${d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })} ${d.toTimeString().slice(0, 5)}`;
 }
 
 // --- the schedule editor ------------------------------------------------------
@@ -197,6 +221,12 @@ class HearthScheduleEditor extends HTMLElement {
     const st = this._state();
     const ufh = st?.attributes?.kind === "underfloor";
     const others = this.rooms.filter((r) => r.entity_id !== this._room);
+    // The night before a Monday is a weekend's, and before a Saturday a
+    // weekday's: say so when that changes what the day starts on.
+    const otherDay = [...(this._draft[other] || [])].sort((a, b) => mins(a.time) - mins(b.time));
+    const otherEnd = otherDay.length ? otherDay[otherDay.length - 1].temp : null;
+    const carryNote = n && otherEnd !== null && otherEnd !== list[n - 1].temp && mins(list[0].time) > 0
+      ? ` On ${this._day === "weekdays" ? "Mondays" : "Saturdays"} that's ${other === "weekends" ? "the weekend's" : "Friday's"} ${deg(otherEnd)}, not ${deg(list[n - 1].temp)}.` : "";
     this.shadowRoot.innerHTML = `<style>${EDITOR_STYLE}</style><div class="stack">
       <div class="row between">
         <div class="seg" role="group" aria-label="Days">${DAYS.map(([k, label]) =>
@@ -204,7 +234,7 @@ class HearthScheduleEditor extends HTMLElement {
         <span class="small ${n >= MAX_CHANGES ? "warn" : "muted"}">${n} of ${MAX_CHANGES} changes</span>
       </div>
       <div class="stack tight">${stripHtml(dayBlocks(list), { tall: true })}${TICKS}</div>
-      <span class="muted small">From each time, the room aims for that temperature until the next change. Before the day's first change, the night before's last one carries on.</span>
+      <span class="muted small">From each time, the room aims for that temperature until the next change. Before the day's first change, the night before's last one carries on.${carryNote}${st?.attributes?.warms_early ? " The room starts warming early, so it's already at a warmer change's temperature by its time." : ""}</span>
       <div class="stack tight">${list.map((c, i) => `<div class="change">
         <span class="swatch" style="background:${tempColour(c.temp)}"></span>
         <label class="muted">From <input type="time" value="${esc(c.time)}" data-time="${i}"></label>
@@ -236,7 +266,15 @@ class HearthScheduleEditor extends HTMLElement {
     const t = e.target;
     if (t.dataset.time !== undefined && t.value) {
       const list = this._list();
-      list[Number(t.dataset.time)].time = t.value;
+      const i = Number(t.dataset.time);
+      if (list.some((c, k) => k !== i && c.time === t.value)) {
+        // Two changes at one time would silently become one when saved.
+        this._msg = `Another change already starts at ${t.value}.`;
+        this._msgBad = true;
+        this._render();
+        return;
+      }
+      list[i].time = t.value;
       this._set(list);
     } else if (t.dataset.copy) {
       t.checked ? this._copying.add(t.dataset.copy) : this._copying.delete(t.dataset.copy);
@@ -256,7 +294,13 @@ class HearthScheduleEditor extends HTMLElement {
       case "add": {
         if (list.length >= MAX_CHANGES) break;
         const t = Math.min(1410, (list.length ? mins(list[list.length - 1].time) : 360) + 60);
-        list.push({ time: hhmm(t), temp: list.length ? list[list.length - 1].temp : 19 });
+        // A change to the same temperature would do nothing: offer the day's
+        // other temperature, the way a day goes warm, cool, warm, cool.
+        const temps = list.map((c) => c.temp);
+        const last = temps.length ? temps[temps.length - 1] : null;
+        const hi = Math.max(...temps), lo = Math.min(...temps);
+        const temp = last === null ? 19 : last !== hi ? hi : lo !== hi ? lo : clamp(last + (last >= 19 ? -3 : 3));
+        list.push({ time: hhmm(t), temp });
         this._set(list);
         break;
       }

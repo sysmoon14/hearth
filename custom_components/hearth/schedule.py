@@ -56,6 +56,12 @@ def normalise_day(changes: list[Any]) -> list[Change]:
     A change to the temperature already in force does nothing, so it is
     dropped; that also keeps days inside the six-change limit.
     """
+    out = _tidy_day(changes)
+    _check_length(out)
+    return out
+
+
+def _tidy_day(changes: list[Any]) -> list[Change]:
     parsed: dict[str, float] = {}
     for change in changes or []:
         if not isinstance(change, dict):
@@ -70,22 +76,31 @@ def normalise_day(changes: list[Any]) -> list[Change]:
         if out and out[-1]["temp"] == temp:
             continue
         out.append({"time": when, "temp": temp})
-    # A change at the start of the day that only repeats the day's last
-    # temperature does nothing either: the last one carries over midnight.
-    if len(out) > 1 and out[0]["temp"] == out[-1]["temp"]:
-        out = out[1:]
-    if len(out) > MAX_CHANGES_PER_DAY:
-        raise ScheduleError(
-            f"a day can have at most {MAX_CHANGES_PER_DAY} changes; this one has {len(out)}"
-        )
     return out
+
+
+def _check_length(day: list[Change]) -> None:
+    if len(day) > MAX_CHANGES_PER_DAY:
+        raise ScheduleError(
+            f"a day can have at most {MAX_CHANGES_PER_DAY} changes; this one has {len(day)}"
+        )
 
 
 def normalise(schedule: dict[str, Any]) -> Schedule:
     """Check and tidy a whole schedule."""
     if not isinstance(schedule, dict):
         raise ScheduleError("a schedule needs weekdays and weekends")
-    return {key: normalise_day(schedule.get(key) or []) for key in DAY_TYPES}
+    days = {key: _tidy_day(schedule.get(key) or []) for key in DAY_TYPES}
+    # A day's first change that only repeats what the night before ended on
+    # does nothing. A weekday follows a weekday or a Sunday, and a weekend day
+    # a Friday or a Saturday, so that's only true when both kinds of day end
+    # on that temperature.
+    ends = {day[-1]["temp"] for day in days.values()}
+    for key, day in days.items():
+        if len(day) > 1 and ends == {day[0]["temp"]}:
+            days[key] = day = day[1:]
+        _check_length(day)
+    return days
 
 
 def parse_valve_day(text: str) -> list[Change]:

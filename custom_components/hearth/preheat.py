@@ -83,7 +83,14 @@ def add(warmups: list[WarmUp], new: WarmUp) -> list[WarmUp]:
 
 
 def rate(warmups: list[WarmUp]) -> float | None:
-    """How fast the room warms, in degrees an hour, once it has seen enough."""
+    """How fast the room warms, in degrees an hour, once it has seen enough.
+
+    Warm-ups Hearth timed itself are the better measure: the history's are
+    whole-house firing periods, read from whatever the sensor recorded then.
+    So the history only counts until the room has seen enough of its own."""
+    seen = [w for w in warmups if w.source == "seen"]
+    if len(seen) >= MIN_WARMUPS:
+        warmups = seen
     if len(warmups) < MIN_WARMUPS:
         return None
     return median(w.rate for w in warmups)

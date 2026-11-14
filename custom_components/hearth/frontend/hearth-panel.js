@@ -5,8 +5,8 @@
 // Hearth's own actions and entities, the same ones the cards use.
 
 import {
-  VERSION, TICKS, boostLabel, clamp, copy, deg, esc, heating, mins, nowPct, num, preheating, reasonOf, statusOf, stripHtml, targetLabel, todayBlocks,
-} from "./hearth-common.js?v=1.0.0b3";
+  VERSION, TICKS, boostLabel, clamp, copy, deg, esc, heating, holidayBack, houseLock, isOff, mins, nowPct, num, preheating, problemOf, reasonOf, statusOf, stripHtml, targetLabel, todayBlocks,
+} from "./hearth-common.js?v=1.0.0b4";
 
 const HOUSE = [["home", "Home"], ["away", "Away"], ["holiday", "Holiday"]];
 const MODES = [["auto", "Schedule"], ["heat", "Fixed"], ["off", "Off"]];
@@ -24,6 +24,7 @@ class HearthPanel extends HTMLElement {
     this._schedRoom = null; // the Schedules tab's room, by id
     this._editor = document.createElement("hearth-schedule-editor");
     this._dialog = null; // add / edit a room
+    this._holiday = null; // starting a holiday: { until }
     this._house = null; // the House tab's unsaved settings
     this._history = {};
     this._hist = null; // the History tab's readings, for one range
@@ -40,17 +41,28 @@ class HearthPanel extends HTMLElement {
     // Rebuilding the page under a finger or mouse loses the tap, so hold
     // updates until it lifts (the click comes just after).
     root.addEventListener("pointerdown", () => { this._pressing = true; });
-    const lifted = () => setTimeout(() => {
+    this._lifted = () => setTimeout(() => {
       this._pressing = false;
-      if (this._pending && !this._typing() && !this._dialog) this._render();
+      if (this._pending && !this._typing() && !this._dialog && !this._holiday) this._render();
     }, 50);
-    window.addEventListener("pointerup", lifted);
-    window.addEventListener("pointercancel", lifted);
     root.addEventListener("click", (e) => this._click(e));
     root.addEventListener("change", (e) => this._change(e));
     root.addEventListener("input", (e) => this._input(e));
     root.addEventListener("value-changed", (e) => this._picked(e));
     root.addEventListener("focusout", () => setTimeout(() => this._pending && !this._typing() && this._render(), 0));
+  }
+
+  // Listeners on the window live only while the panel is on the page.
+  connectedCallback() {
+    window.addEventListener("pointerup", this._lifted);
+    window.addEventListener("pointercancel", this._lifted);
+  }
+
+  disconnectedCallback() {
+    window.removeEventListener("pointerup", this._lifted);
+    window.removeEventListener("pointercancel", this._lifted);
+    clearTimeout(this._toastTimer);
+    for (const step of Object.values(this._steps)) clearTimeout(step.timer);
   }
 
   set hass(hass) {
@@ -67,7 +79,7 @@ class HearthPanel extends HTMLElement {
     const sig = this._watched().map((id) => hass.states[id]?.last_updated).join("|");
     if (sig === this._sig) return;
     this._sig = sig;
-    if (this._typing() || this._dialog || this._pressing) { this._pending = true; return; }
+    if (this._typing() || this._dialog || this._holiday || this._pressing) { this._pending = true; return; }
     this._render();
   }
 
@@ -177,7 +189,7 @@ class HearthPanel extends HTMLElement {
     else body = this._roomsTab();
     root.innerHTML = `<style>${STYLE}</style><div class="page">${this._header()}<div class="content">${
       this._info.loaded ? "" : `<div class="wrap"><div class="card warn">Hearth isn't running. Check Settings → Devices & services.</div></div>`}${body}</div>${
-      this._dialog ? this._dialogHtml() : ""}${this._toast ? `<div class="toast" role="status">${esc(this._toast)}</div>` : ""}</div>`;
+      this._dialog ? this._dialogHtml() : this._holiday ? this._holidayHtml() : ""}${this._toast ? `<div class="toast" role="status">${esc(this._toast)}</div>` : ""}</div>`;
     const content = root.querySelector(".content");
     if (content) content.scrollTop = scroll;
     this._wirePickers();
@@ -198,7 +210,7 @@ class HearthPanel extends HTMLElement {
           <button class="icon" data-act="back" aria-label="Back to rooms"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 5l-7 7 7 7"/></svg></button>
           <h1>${esc(room.name)}</h1>${this._heating(room) ? `<span class="chip heat">${preheating(st) ? "Warming up early" : "Heating"}</span>` : ""}
           <span class="grow"></span>
-          <button class="btn" data-act="boost" data-id="${esc(room.id)}">${boosting ? "End boost" : `Boost ${esc(boostLabel(this._state(this._info.house_mode)))}`}</button>
+          <button class="btn" data-act="boost" data-id="${esc(room.id)}" ${!boosting && this._state(this._info.house_mode)?.state === "holiday" ? "disabled" : ""}>${boosting ? "End boost" : `Boost ${esc(boostLabel(this._state(this._info.house_mode), st))}`}</button>
         </header>`;
       }
     }
@@ -206,7 +218,7 @@ class HearthPanel extends HTMLElement {
     const tabs = [["rooms", "Rooms"], ["history", "History"], ["schedules", "Schedules"], ...(this._admin() ? [["house", "House"]] : [])];
     return `<header class="bar">${menu}
         <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="var(--hp-heat)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${ICON_FLAME}"/></svg>
-        <h1>Heating</h1><span class="grow"></span>
+        <h1>Heating</h1>${holidayBack(this._state(this._info.house_mode)) ? `<span class="chip grey">Holiday · ${esc(holidayBack(this._state(this._info.house_mode)))}</span>` : ""}<span class="grow"></span>
         ${this._info.house_mode ? `<div class="seg" role="group" aria-label="House mode">${HOUSE.map(([k, label]) =>
           `<button data-act="house" data-mode="${k}" aria-pressed="${mode === k}" class="${mode === k ? "on" : ""}">${label}</button>`).join("")}</div>` : ""}
       </header>
@@ -256,22 +268,16 @@ class HearthPanel extends HTMLElement {
         ? `${esc(this._name(i.settings.boiler_switch))} is ${sw.state}`
         : `${esc(this._name(i.settings.boiler_switch))} is unavailable, so the boiler can't be asked`;
       cards.push(`<div class="card status-card ${on ? "hot" : ""}">
-        <div class="row between"><span class="caps">Radiators</span><span class="chip ${on ? "heat" : "ok"}">${on ? "Calling" : "Idle"}</span></div>
-        <div class="big">${on ? `${esc(asking.join(", ") || "A room")} ${asking.length > 1 ? "want" : "wants"} heat` : "No room wants heat"}</div>
+        <div class="row between"><span class="caps">Radiators</span><span class="chip ${on ? "heat" : "ok"}">${on ? "Asking for heat" : "Idle"}</span></div>
+        <div class="big">${on ? `${esc(asking.join(", ") || "A room")} ${asking.length > 1 ? "are" : "is"} asking for heat` : "No room is asking for heat"}</div>
         <div class="muted small">${how}</div></div>`);
     }
     if (ufh.length) {
       const heating = ufh.filter((r) => this._heating(r)).map((r) => r.name);
       cards.push(`<div class="card status-card">
-        <div class="row between"><span class="caps">Underfloor</span><span class="chip grey">On its stats</span></div>
-        <div class="big">${heating.length ? `${esc(heating.join(", "))} heating` : ufh.length > 1 ? "All comfortable" : "Comfortable"}</div>
-        <div class="muted small">The neoHub runs ${esc(ufh.map((r) => r.name).join(", "))} from the profiles Hearth wrote</div></div>`);
-    }
-    if (rads.length && i.settings.boiler_switch) {
-      cards.push(`<div class="card status-card">
-        <div class="row between"><span class="caps">If Hearth stops</span><span class="chip ok">Covered</span></div>
-        <div class="big">It stops asking for heat</div>
-        <div class="muted small">By turning ${esc(this._name(i.settings.boiler_switch))} off · what happens next is up to what it drives${ufh.length ? " · the stats carry on as they are" : ""}</div></div>`);
+        <div class="row between"><span class="caps">Underfloor</span><span class="chip ${heating.length ? "heat" : "ok"}">${heating.length ? "Heating" : "Idle"}</span></div>
+        <div class="big">${heating.length ? `${esc(heating.join(", "))} heating` : "No floor is heating"}</div>
+        <div class="muted small">${esc(ufh.map((r) => r.name).join(", "))} ${ufh.length > 1 ? "run" : "runs"} on ${ufh.length > 1 ? "their thermostats" : "its thermostat"}, which ${ufh.length > 1 ? "carry" : "carries"} on if Home Assistant stops</div></div>`);
     }
     return cards.join("");
   }
@@ -288,10 +294,11 @@ class HearthPanel extends HTMLElement {
     return `<button class="card room" data-act="room" data-id="${esc(room.id)}">
       <div class="row between"><span class="rname"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="${heating ? "var(--hp-heat)" : "var(--secondary-text-color)"}" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="${room.kind === "radiator" ? ICON_RAD : ICON_UFH}"/></svg>${esc(room.name)}</span>
         <span class="chip ${chip}">${modeLabel}${a.preset_mode === "boost" ? " · Boost" : ""}</span></div>
-      <div class="temps"><span class="now">${deg(a.current_temperature)}</span><span class="muted">→ ${deg(a.temperature)}</span></div>
+      <div class="temps"><span class="now">${deg(a.current_temperature)}</span><span class="muted">${isOff(st) ? "off" : `→ ${deg(a.temperature)}`}</span></div>
+      ${problemOf(st) ? `<div class="small warntext">${esc(problemOf(st))}</div>` : ""}
       <div class="why ${heating || st?.state === "off" ? "" : "muted"} ${heating ? "hot" : ""}">${esc(statusOf(st))}</div>
       ${reasonOf(st) ? `<div class="muted small">${esc(reasonOf(st))}</div>` : ""}
-      <div class="muted small">${devices}</div></button>`;
+      ${this._admin() ? `<div class="muted small">${devices}</div>` : ""}</button>`;
   }
 
   _name(id) {
@@ -314,23 +321,27 @@ class HearthPanel extends HTMLElement {
         <span class="${online(id) ? "good" : "bad"}">${online(id) ? "Online" : "Offline"}</span></div>`;
     }).join("");
     const sensor = room.sensor ? this._state(room.sensor) : null;
+    const lock = isOff(st) ? "" : houseLock(this._state(this._info.house_mode), st);
+    const still = isOff(st) || lock ? "disabled" : "";
     return `<div class="wrap split">
       <div class="main stack">
         <section class="card nowcard">
           <div class="stack tight grow">
             <span class="caps">Now</span>
-            <div class="temps"><span class="huge">${deg(a.current_temperature)}</span><span class="muted mid">→ ${deg(a.temperature)}</span></div>
+            <div class="temps"><span class="huge">${deg(a.current_temperature)}</span><span class="muted mid">${isOff(st) ? "off" : `→ ${deg(a.temperature)}`}</span></div>
+            ${problemOf(st) ? `<span class="warntext">${esc(problemOf(st))}</span>` : ""}
             <span class="why ${heating ? "hot" : ""}" style="font-size:17px">${esc(statusOf(st))}</span>
             ${reasonOf(st) ? `<span class="muted">${esc(reasonOf(st))}</span>` : ""}
           </div>
           <div class="controls">
             <div class="row" style="gap:18px">
-              <button class="round" data-act="step" data-id="${esc(room.id)}" data-step="-0.5" aria-label="Cooler">−</button>
-              <div class="target"><div class="tbig">${deg(this._steps[room.id]?.temp ?? a.temperature)}</div><div class="muted small">${esc(st ? targetLabel(st) : "")}</div></div>
-              <button class="round" data-act="step" data-id="${esc(room.id)}" data-step="0.5" aria-label="Warmer">+</button>
+              <button class="round" data-act="step" data-id="${esc(room.id)}" data-step="-0.5" aria-label="Cooler" ${still}>−</button>
+              <div class="target"><div class="tbig">${isOff(st) ? "Off" : deg(this._steps[room.id]?.temp ?? a.temperature)}</div><div class="muted small">${esc(!st ? "" : isOff(st) ? `kept above ${deg(a.temperature)}` : targetLabel(st))}</div></div>
+              <button class="round" data-act="step" data-id="${esc(room.id)}" data-step="0.5" aria-label="Warmer" ${still}>+</button>
             </div>
             <div class="seg" role="group" aria-label="Mode">${MODES.map(([k, label]) =>
               `<button data-act="mode" data-id="${esc(room.id)}" data-mode="${k}" class="${st?.state === k ? "on" : ""}" aria-pressed="${st?.state === k}">${label}</button>`).join("")}</div>
+            ${lock ? `<span class="muted small">${esc(lock)}</span>` : ""}
           </div>
         </section>
         <section class="card stack">
@@ -348,7 +359,7 @@ class HearthPanel extends HTMLElement {
         <div class="kv"><span>Away · Holiday<span class="sub">The house settings</span></span><span>${deg(this._info.settings.away_temp)} · ${deg(this._info.settings.holiday_temp)}</span></div>
         <div class="row flexwrap" style="padding-top:12px">
           <button class="btn" data-act="edit-schedule" data-id="${esc(room.id)}">Edit schedule</button>
-          ${this._admin() ? `<button class="btn" data-act="edit" data-id="${esc(room.id)}">Change devices</button>
+          ${this._admin() ? `<button class="btn" data-act="edit" data-id="${esc(room.id)}">Change room</button>
           <button class="btn danger" data-act="remove" data-id="${esc(room.id)}">Remove</button>` : ""}
         </div>
         <span class="muted small" style="padding-top:12px">${esc(room.entity_id || "")} · in Home Assistant its modes are Auto (Schedule), Heat (Fixed) and Off.</span>
@@ -366,7 +377,7 @@ class HearthPanel extends HTMLElement {
     const own = room.kind === "radiator" ? "the valve's" : "the stat's";
     const source = room.sensor ? "" : ` Timed by ${own} own reading, the one ${esc(room.name)} decides it's warm by.`;
     const early = room.kind === "radiator"
-      ? (Number(this._info.settings.preheat_max_minutes) ? `Hearth starts ${esc(room.name)} early, up to ${Number(this._info.settings.preheat_max_minutes)} min, so a warmer change is reached on time.` : "Starting early is off for radiator rooms (House settings).")
+      ? (room.warm_early === false ? `Starting early is off for ${esc(room.name)} (Change room).` : Number(this._info.settings.preheat_max_minutes) ? `Hearth starts ${esc(room.name)} early, up to ${Number(this._info.settings.preheat_max_minutes)} min, so a warmer change is reached on time.` : "Starting early is off for radiator rooms (House settings).")
       : "The stat starts early by itself (its optimum start), so each change is reached on time.";
     if (a.warm_up_rate == null) {
       return card("Learning", "grey", `<span class="muted">Hearth times each warm-up, from asking for heat to reaching the target, and says how long a room has to go once it has seen 2. It has seen ${learned} so far.${source}</span>
@@ -388,8 +399,11 @@ class HearthPanel extends HTMLElement {
   async _drawHistory(room) {
     const host = this.shadowRoot.querySelector(`[data-chart="${CSS.escape(room.id)}"]`);
     if (!host || !room.entity_id) return;
+    // Drawn at the width it's shown, so its labels are the same size on a
+    // phone as on a desk.
+    const width = Math.max(280, Math.round(host.clientWidth || 600));
     const cached = this._history[room.id];
-    if (cached && Date.now() - cached.at < 120000) { host.innerHTML = cached.svg; return; }
+    if (cached && cached.width === width && Date.now() - cached.at < 120000) { host.innerHTML = cached.svg; return; }
     const start = new Date(); start.setHours(0, 0, 0, 0);
     try {
       const res = await this._hass.callWS({
@@ -397,8 +411,8 @@ class HearthPanel extends HTMLElement {
         minimal_response: false, no_attributes: false, significant_changes_only: false,
       });
       const rows = (res[room.entity_id] || []).map((r) => ({ t: (r.lu ?? r.lc) * 1000, a: r.a || {} }));
-      const svg = this._chart(rows, start.getTime());
-      this._history[room.id] = { at: Date.now(), svg };
+      const svg = this._chart(rows, start.getTime(), width);
+      this._history[room.id] = { at: Date.now(), svg, width };
       const now = this.shadowRoot.querySelector(`[data-chart="${CSS.escape(room.id)}"]`);
       if (now) now.innerHTML = svg;
     } catch (err) {
@@ -406,7 +420,7 @@ class HearthPanel extends HTMLElement {
     }
   }
 
-  _chart(rows, dayStart) {
+  _chart(rows, dayStart, W = 1000) {
     // Attributes carry forward between rows (each row lists only what changed).
     let cur = {};
     const pts = rows.map((r) => { cur = { ...cur, ...r.a }; return { t: r.t, room: num(cur.current_temperature), target: num(cur.temperature), heat: ["heating", "preheating"].includes(cur.hvac_action) }; })
@@ -416,7 +430,7 @@ class HearthPanel extends HTMLElement {
     const vals = pts.flatMap((p) => [p.room, p.target]).filter((v) => v !== null);
     let lo = Math.floor(Math.min(...vals) - 1), hi = Math.ceil(Math.max(...vals) + 1);
     if (hi - lo < 4) { hi = lo + 4; }
-    const W = 1000, H = 230, L = 40, T = 20, B = 200;
+    const H = 230, L = 34, T = 20, B = 200;
     const x = (t) => L + ((t - dayStart) / 86400000) * (W - L);
     const y = (v) => B - ((v - lo) / (hi - lo)) * (B - T);
     const line = (key, step) => {
@@ -481,7 +495,7 @@ class HearthPanel extends HTMLElement {
     const card = (r, i) => {
       const room = r.room;
       const heated = r.alwaysOff ? "Off the whole time" : r.heat + r.pre ? `Heated ${dur(r.heat + r.pre)}` : "Didn't need heat";
-      const earlyLine = room.kind !== "radiator" ? "Early starts are the stat's own" : r.pre ? `of which ${dur(r.pre)} warming up early` : "No early start";
+      const earlyLine = room.kind !== "radiator" ? "Starts early by itself" : r.pre ? `of which ${dur(r.pre)} warming up early` : "No early start";
       const nowTop = r.now === null ? null : ((hi - r.now) / (hi - lo)) * 100;
       return `<article class="card hroom">
         <div class="hinfo">
@@ -560,11 +574,15 @@ class HearthPanel extends HTMLElement {
         target: gone || state === "off" ? null : num(attrs.temperature),
         state: gone ? "gap" : act === "preheating" ? "pre" : act === "heating" ? "heat" : state === "off" || act === "off" ? "off" : "idle",
         nextAt: attrs.next_change_at ? Date.parse(attrs.next_change_at) : null,
+        nextTemp: num(attrs.next_change_temp),
+        early: !!attrs.preheating,
       });
     }
     const segs = [];
     let heat = 0, pre = 0, reached = 0, changes = 0;
     const busy = [];
+    // What the room was set to before any early start for the change ahead.
+    let sched = null;
     pts.forEach((p, i) => {
       const until = i + 1 < pts.length ? pts[i + 1].t : end;
       if (until <= p.t) return;
@@ -575,12 +593,17 @@ class HearthPanel extends HTMLElement {
       if (p.state === "pre") pre += until - p.t;
       if (p.state === "heat" || p.state === "pre") busy.push([p.t, until]);
       // A warmer schedule change: was the room already there when it came?
+      // The change is the moment the one it was waiting for passes. (The
+      // target itself rises earlier, when the room starts warming up for it.)
       const prev = pts[i - 1];
-      if (prev && prev.target !== null && p.target !== null && p.target > prev.target
-          && prev.nextAt && Math.abs(p.t - prev.nextAt) < 600000) {
+      if (prev && prev.nextAt && prev.nextTemp !== null && p.nextAt !== prev.nextAt
+          && p.t >= prev.nextAt - 1000 && p.t - prev.nextAt < 600000
+          && sched !== null && prev.nextTemp > sched && p.state !== "off" && p.state !== "gap") {
         changes++;
-        if (p.room !== null && p.room >= p.target - 0.3) reached++;
+        const room = p.room ?? prev.room;
+        if (room !== null && room >= prev.nextTemp - 0.3) reached++;
       }
+      if (p.target !== null && !p.early) sched = p.target;
     });
     const temps = pts.map((p) => p.room).filter((v) => v !== null);
     const now = [...pts].reverse().find((p) => p.room !== null)?.room ?? null;
@@ -632,7 +655,7 @@ class HearthPanel extends HTMLElement {
     const ticks = [];
     const d = new Date(start); d.setMinutes(0, 0, 0);
     while (d.getTime() <= start || d.getHours() % every) d.setHours(d.getHours() + 1);
-    for (; d.getTime() < end - span * 0.03; d.setHours(d.getHours() + every)) {
+    for (; d.getTime() < end - span * 0.07; d.setHours(d.getHours() + every)) {
       const day = d.getHours() === 0;
       ticks.push({ pct: ((d.getTime() - start) / span) * 100, day,
         label: day ? d.toLocaleDateString(undefined, { weekday: "short" }) : `${String(d.getHours()).padStart(2, "0")}:00` });
@@ -727,10 +750,11 @@ class HearthPanel extends HTMLElement {
             <span class="node">${esc(h.boiler_switch ? this._name(h.boiler_switch) : "Call for heat switch")}</span><span aria-hidden="true">→</span>
             <span class="node">Boiler</span></div>
           <div>
-            <div class="kv"><span>Call for heat switch<span class="sub">${h.boiler_switch ? (swOk ? `On while a room wants heat, off otherwise${i.last_boiler_command ? ` · last: ${esc(i.last_boiler_command)}` : ""}` : "Unavailable: Hearth can't ask for heat until it's back") : "Any on/off switch that calls the boiler for heat: a relay, a thermostat's call-for-heat switch, a helper"}</span></span>
+            <div class="kv"><span>Call for heat switch<span class="sub">${h.boiler_switch ? (swOk ? `On while a room is asking for heat, off otherwise${i.last_boiler_command ? ` · last: ${esc(i.last_boiler_command)}` : ""}` : "Unavailable: Hearth can't ask for heat until it's back") : "Any on/off switch that calls the boiler for heat: a relay, a thermostat's call-for-heat switch, a helper"}</span></span>
               <span class="pick">${this._entityField("boiler_switch", "switch,input_boolean", "Call for heat switch", h.boiler_switch)}</span></div>
             ${secRow("demand_on_delay", "Wait before heating", "So the boiler doesn't flick on as valves settle", 0, 900, "s", 1)}
             ${secRow("demand_off_delay", "Wait before stopping", "", 0, 1800, "s", 1)}
+            ${h.boiler_switch ? `<div class="kv"><span>If Hearth stops<span class="sub">It turns ${esc(this._name(h.boiler_switch))} off when Hearth or Home Assistant stops or restarts. If Home Assistant crashes or loses power, the switch stays as it was: what happens next is up to what it drives.</span></span></div>` : ""}
           </div>
         </section>
         <section class="card stack">
@@ -753,8 +777,9 @@ class HearthPanel extends HTMLElement {
         <section class="card">
           <h2>Every room</h2>
           ${tempRow("boost_temp", "Boost to", "", 15, 28)}
-          ${secRow("boost_minutes", "Boost for", "", 15, 240, "min", 1)}
-          ${tempRow("off_temp", "A radiator room that's off", "Kept above", 5, 15)}
+          ${secRow("boost_minutes", "Boost a radiator room for", "", 15, 240, "min", 1)}
+          ${secRow("boost_minutes_underfloor", "Boost an underfloor room for", "A floor takes longer to answer", 30, 480, "min", 1)}
+          ${tempRow("off_temp", "A radiator room that's off", "Kept above · an underfloor room that's off keeps its thermostat's own frost setting", 5, 15)}
           ${secRow("preheat_max_minutes", "Warm up early by up to", "Radiator rooms start early to reach a warmer change on time · 0 turns it off", 0, 360, "min", 1)}
         </section>
         <section class="card stack tight">
@@ -766,6 +791,8 @@ class HearthPanel extends HTMLElement {
   }
 
   _health(room) {
+    const problem = problemOf(this._state(room.entity_id));
+    if (problem) return `<span class="small ${/offline/.test(problem) ? "bad" : "warntext"}">${esc(problem)}</span>`;
     const ids = room.kind === "radiator" ? [...room.trvs, room.sensor] : [room.stat, room.sensor];
     const down = ids.filter(Boolean).filter((id) => { const s = this._state(id); return !s || ["unavailable", "unknown"].includes(s.state); });
     if (down.length) return `<span class="small bad">${esc(down.map((d) => this._name(d)).join(", "))} offline</span>`;
@@ -778,15 +805,31 @@ class HearthPanel extends HTMLElement {
     if (this._pickers) {
       return `<ha-entity-picker data-pick="${esc(key)}" data-domain="${domain}" data-class="${esc(deviceClass)}" data-label="${esc(label)}" data-value="${esc(value || "")}"></ha-entity-picker>`;
     }
-    const ids = Object.keys(this._hass.states).filter((id) => domain.split(",").includes(id.split(".")[0])
+    const ids = Object.keys(this._hass.states).filter((id) => domain.split(",").includes(id.split(".")[0]) && this._allowed(key, id)
       && (!deviceClass || this._hass.states[id].attributes.device_class === deviceClass)).sort();
     return `<select data-pick-select="${esc(key)}" aria-label="${esc(label)}"><option value="">None</option>${ids.map((id) =>
       `<option value="${esc(id)}" ${id === value ? "selected" : ""}>${esc(this._name(id))}</option>`).join("")}</select>`;
   }
 
+  // What may be picked: a valve isn't a Hearth room or a Heatmiser stat, a
+  // stat is a Heatmiser one, and neither already heats another room.
+  _allowed(key, id) {
+    const valve = key.startsWith("d-trv");
+    if (!valve && key !== "d-stat") return true;
+    const platform = this._hass.entities?.[id]?.platform;
+    if (platform === "hearth") return false;
+    if (valve && platform === "heatmiserneo") return false;
+    if (!valve && platform && platform !== "heatmiserneo") return false;
+    const mine = this._dialog?.draft;
+    if (valve && mine && mine.trvs.includes(id) && mine.trvs[Number(key.slice(5))] !== id) return false;
+    return !this._info.rooms.some((r) => r.id !== mine?.id && (r.trvs.includes(id) || r.stat === id));
+  }
+
   _wirePickers() {
     for (const picker of this.shadowRoot.querySelectorAll("ha-entity-picker[data-pick]")) {
       picker.hass = this._hass;
+      const key = picker.dataset.pick;
+      picker.entityFilter = (s) => this._allowed(key, s.entity_id);
       picker.includeDomains = picker.dataset.domain.split(",");
       if (picker.dataset.class) picker.includeDeviceClasses = [picker.dataset.class];
       picker.value = picker.dataset.value || "";
@@ -824,8 +867,8 @@ class HearthPanel extends HTMLElement {
   _openDialog(room) {
     this._dialog = {
       step: room ? 1 : 0,
-      draft: room ? { id: room.id, name: room.name, kind: room.kind, trvs: [...room.trvs], sensor: room.sensor || null, stat: room.stat || null, profile: room.profile || "" }
-        : { id: null, name: "", kind: "radiator", trvs: [], sensor: null, stat: null, profile: "" },
+      draft: room ? { id: room.id, name: room.name, kind: room.kind, trvs: [...room.trvs], sensor: room.sensor || null, stat: room.stat || null, profile: room.profile || "", warm_early: room.warm_early !== false }
+        : { id: null, name: "", kind: "radiator", trvs: [], sensor: null, stat: null, profile: "", warm_early: true },
       error: "",
     };
     this._render();
@@ -884,7 +927,9 @@ class HearthPanel extends HTMLElement {
             <span class="stack tight grow"><span>A sensor</span>${this._entityField("d-sensor", "sensor", "Temperature sensor", d.sensor, "temperature")}</span></label>
           <label class="opt ${chosen === "own" ? "on" : ""}"><input type="radio" name="src" ${chosen === "own" ? "checked" : ""} data-dialog="sensor-mode" value="own">
             <span class="stack tight"><span>${d.kind === "radiator" ? "The valve's own reading" : "The stat's own reading"}</span><span class="muted small">${own !== null && own !== undefined ? `Reads ${deg(own)} now` : ""}${d.kind === "radiator" ? ": it sits on the radiator, so the room may run cool" : ""}</span></span></label>
-        </div>`;
+        </div>
+        ${d.kind === "radiator" ? `<label class="opt ${d.warm_early ? "on" : ""}"><input type="checkbox" ${d.warm_early ? "checked" : ""} data-dialog="warm_early">
+          <span class="stack tight"><span>Start early for warmer changes</span><span class="muted small">So ${esc(d.name)} is already warm at a change's time. Turn it off for a room that shouldn't heat ahead of time, like a bedroom before a short morning slot.</span></span></label>` : ""}`;
     }
     const last = step === 2;
     return `<div class="scrim"><section class="dialog" role="dialog" aria-label="${editing ? "Change a room" : "Add a room"}">
@@ -897,6 +942,25 @@ class HearthPanel extends HTMLElement {
       <div class="row between">
         <button class="btn" data-act="${step ? "d-back" : "d-close"}">${step ? "Back" : "Cancel"}</button>
         <button class="btn solid" data-act="${last ? "d-save" : "d-next"}" ${canNext && !this._busy ? "" : "disabled"}>${last ? (this._busy ? "Saving…" : editing ? "Save" : "Add room") : `Next: ${steps[step + 1].toLowerCase()}`}</button>
+      </div></section></div>`;
+  }
+
+  _holidayHtml() {
+    const house = this._state(this._info.house_mode);
+    const on = house?.state === "holiday";
+    const pad = (n) => String(n).padStart(2, "0");
+    const d = new Date(Date.now() + 3600000);
+    const min = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:00`;
+    const until = this._holiday.until;
+    return `<div class="scrim"><section class="dialog" role="dialog" aria-label="Holiday">
+      <div class="row between"><h2 class="dtitle">${on ? "Change the holiday" : "Go on holiday"}</h2>
+        <button class="icon" data-act="hol-close" aria-label="Close"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+      <p class="muted">Every room is kept above ${deg(this._info.settings.holiday_temp)}, whatever its mode or schedule, and any boost ends.</p>
+      <label class="field">Back on (optional)<input type="datetime-local" min="${min}" value="${esc(until)}" data-holiday="until"></label>
+      <span class="muted small">${until ? "The house goes back to Home then, and rooms pick up their schedules. Set it a few hours before you're home so it's warm when you arrive." : "Without a day to come back, the house stays on Holiday until someone switches it to Home."}</span>
+      <div class="row between">
+        <button class="btn" data-act="hol-close">Cancel</button>
+        <button class="btn solid" data-act="hol-start">${on ? "Save" : "Start holiday"}</button>
       </div></section></div>`;
   }
 
@@ -929,7 +993,22 @@ class HearthPanel extends HTMLElement {
       case "tab": this._tab = el.dataset.tab; this._room = null; this._render(); return;
       case "back": this._room = null; this._render(); return;
       case "room": this._room = id; this._render(); return;
-      case "house": this._call("select", "select_option", { entity_id: this._info.house_mode, option: el.dataset.mode }); return;
+      case "house": {
+        const now = this._state(this._info.house_mode)?.state;
+        if (el.dataset.mode === now && now !== "holiday") return;
+        // Holiday drops every room at once, and can end by itself: ask first.
+        if (el.dataset.mode === "holiday") { this._holiday = { until: "" }; this._render(); return; }
+        this._call("select", "select_option", { entity_id: this._info.house_mode, option: el.dataset.mode });
+        return;
+      }
+      case "hol-close": this._holiday = null; this._render(); return;
+      case "hol-start": {
+        const until = this._holiday.until;
+        this._holiday = null;
+        this._call("hearth", "set_holiday", until ? { until: `${until.replace("T", " ")}:00` } : {});
+        this._render();
+        return;
+      }
       case "mode": this._call("climate", "set_hvac_mode", { entity_id: room.entity_id, hvac_mode: el.dataset.mode }); return;
       case "step": this._step(room, Number(el.dataset.step)); return;
       case "boost": {
@@ -963,6 +1042,7 @@ class HearthPanel extends HTMLElement {
       this._render();
       return;
     }
+    if (t.dataset.holiday && this._holiday) { this._holiday.until = t.value; this._render(); return; }
     if (t.dataset.pickSelect) { this._choose(t.dataset.pickSelect, t.value); return; }
     if (t.dataset.dialog) this._dialogInput(t, true);
   }
@@ -1001,6 +1081,7 @@ class HearthPanel extends HTMLElement {
     else if (key === "kind") d.kind = t.value;
     else if (key === "sensor-pick") d.sensor = t.value;
     else if (key === "sensor-mode" && t.value === "own") d.sensor = null;
+    else if (key === "warm_early") d.warm_early = t.checked;
     if (render) this._render();
     else {
       const next = this.shadowRoot.querySelector('[data-act="d-next"]');
@@ -1025,7 +1106,8 @@ class HearthPanel extends HTMLElement {
       const res = await this._hass.callWS({
         type: "hearth/save_room",
         room: { id: d.id, name: d.name.trim(), kind: d.kind, trvs: d.kind === "radiator" ? d.trvs : [],
-          sensor: d.sensor || null, stat: d.kind === "underfloor" ? d.stat : null, profile: d.kind === "underfloor" ? (d.profile || null) : null },
+          sensor: d.sensor || null, stat: d.kind === "underfloor" ? d.stat : null, profile: d.kind === "underfloor" ? (d.profile || null) : null,
+          warm_early: d.warm_early !== false },
       });
       const added = !d.id;
       this._dialog = null;
@@ -1137,6 +1219,7 @@ p{margin:0;line-height:1.45}
 .nowcard{display:flex;flex-wrap:wrap;gap:28px;align-items:center}
 .controls{display:flex;flex-direction:column;align-items:center;gap:12px}
 .round{width:52px;height:52px;border-radius:26px;border:1px solid var(--hp-line);background:transparent;color:var(--primary-text-color);font-size:24px;cursor:pointer}
+.round:disabled{opacity:.35;cursor:default}
 .round.sm{width:44px;height:44px;font-size:20px}
 .target{text-align:center;min-width:96px}
 .tbig{font-size:40px;font-weight:300}
@@ -1184,11 +1267,12 @@ p{margin:0;line-height:1.45}
 .hticks .nowtick{transform:translateX(-100%);color:var(--primary-color)}
 .kv{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 0;border-top:1px solid var(--hp-line);font-size:14px}
 .kv label,.kv>span:first-child{flex:1 1 auto}
+.kv>span:last-child:not(:first-child):not([class]){flex:none;white-space:nowrap}
 .sub{display:block;font-size:12px;color:var(--secondary-text-color);margin-top:2px;line-height:1.4}
 .pick{flex:0 1 300px;min-width:200px}
 .pick ha-entity-picker,.pick select{width:100%}
-select,input[type=number],input[type=text],input[type=time]{min-height:40px;padding:6px 10px;border:1px solid var(--hp-line);border-radius:8px;background:var(--primary-background-color);color:var(--primary-text-color);font:inherit;font-size:14px}
-input[type=time]{color-scheme:light dark;font-size:15px}
+select,input[type=number],input[type=text],input[type=time],input[type=datetime-local]{min-height:40px;padding:6px 10px;border:1px solid var(--hp-line);border-radius:8px;background:var(--primary-background-color);color:var(--primary-text-color);font:inherit;font-size:14px}
+input[type=time],input[type=datetime-local]{color-scheme:light dark;font-size:15px}
 .unit{display:inline-flex;align-items:center;gap:6px}
 .unit input{width:84px;text-align:right}
 .switch{width:44px;height:24px;border-radius:12px;border:0;padding:0;background:rgba(127,127,127,.5);position:relative;cursor:pointer;flex:none}
@@ -1222,7 +1306,7 @@ summary{cursor:pointer;min-height:36px;display:flex;align-items:center;color:var
 .field{display:flex;flex-direction:column;gap:6px;font-size:13px;color:var(--secondary-text-color)}
 .field input{font-size:15px}
 .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--primary-text-color);color:var(--primary-background-color);padding:12px 20px;border-radius:8px;font-size:14px;z-index:6;max-width:calc(100% - 32px)}
-@media (max-width:600px){.wrap{padding:16px}.pills{flex-wrap:nowrap;overflow-x:auto;margin:0 -16px;padding:0 16px;scrollbar-width:none}.huge{font-size:52px}.tname{width:110px}}
+@media (max-width:600px){.wrap>.status{order:2}.wrap>.status~section:last-child{order:3}.wrap{padding:16px}.pills{flex-wrap:nowrap;overflow-x:auto;margin:0 -16px;padding:0 16px;scrollbar-width:none}.huge{font-size:52px}.tname{width:110px}}
 `;
 
 if (!customElements.get("hearth-panel")) {

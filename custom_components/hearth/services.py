@@ -13,11 +13,15 @@ from homeassistant.helpers import config_validation as cv, entity_registry as er
 from .const import (
     DOMAIN,
     SERVICE_BOOST,
+    HOUSE_HOLIDAY,
     SERVICE_CANCEL_BOOST,
+    SERVICE_SET_HOLIDAY,
     SERVICE_SET_SCHEDULE,
     WEEKDAYS,
     WEEKENDS,
 )
+from homeassistant.util import dt as dt_util
+
 from .schedule import ScheduleError
 from .zone import Zone
 
@@ -38,6 +42,7 @@ BOOST_SCHEMA = vol.Schema(
     }
 )
 ENTITY_SCHEMA = vol.Schema({vol.Required(ATTR_ENTITY_ID): cv.entity_ids})
+HOLIDAY_SCHEMA = vol.Schema({vol.Optional("until"): cv.datetime})
 
 
 def _zones(hass: HomeAssistant, call: ServiceCall) -> list[Zone]:
@@ -74,6 +79,18 @@ def async_setup_services(hass: HomeAssistant) -> None:
         for zone in _zones(hass, call):
             await zone.async_cancel_boost()
 
+    async def set_holiday(call: ServiceCall) -> None:
+        entries = [e for e in hass.config_entries.async_entries(DOMAIN) if e.state is ConfigEntryState.LOADED]
+        if not entries:
+            raise ServiceValidationError("Hearth isn't running")
+        until = call.data.get("until")
+        if until is not None:
+            until = dt_util.as_utc(until if until.tzinfo else until.replace(tzinfo=dt_util.get_default_time_zone()))
+            if until <= dt_util.utcnow():
+                raise ServiceValidationError("A holiday has to end some time from now")
+        await entries[0].runtime_data.async_set_house_mode(HOUSE_HOLIDAY, until)
+
+    hass.services.async_register(DOMAIN, SERVICE_SET_HOLIDAY, set_holiday, HOLIDAY_SCHEMA)
     hass.services.async_register(DOMAIN, SERVICE_SET_SCHEDULE, set_schedule, SET_SCHEDULE_SCHEMA)
     hass.services.async_register(DOMAIN, SERVICE_BOOST, boost, BOOST_SCHEMA)
     hass.services.async_register(DOMAIN, SERVICE_CANCEL_BOOST, cancel_boost, ENTITY_SCHEMA)

@@ -10,8 +10,8 @@
  */
 
 import {
-  VERSION, TICKS, STRIP_STYLE, boostLabel, clamp, deg, esc, heating, nowPct, reasonOf, statusOf, stripHtml, targetLabel, todayBlocks,
-} from "./hearth-common.js?v=1.0.0b3";
+  VERSION, TICKS, STRIP_STYLE, boostLabel, clamp, deg, esc, heating, holidayBack, houseLock, isOff, nowPct, problemOf, reasonOf, statusOf, stripHtml, targetLabel, todayBlocks,
+} from "./hearth-common.js?v=1.0.0b4";
 
 const MODES = [["auto", "Schedule"], ["heat", "Fixed"], ["off", "Off"]];
 const HOUSE = [["home", "Home"], ["away", "Away"], ["holiday", "Holiday"]];
@@ -20,8 +20,12 @@ const STYLE = `
   :host { display: block; }
   ha-card { overflow: hidden; }
   ${STRIP_STYLE}
-  .strip { height: 12px; border-radius: 6px; }
-  .strip .block span { display: none; }
+  .strip { height: 22px; border-radius: 6px; }
+  .strip .block { font-size: 11px; }
+  .row:focus-visible { outline: 2px solid var(--primary-color); outline-offset: -2px; }
+  .lock { font-size: .8rem; color: var(--secondary-text-color); text-align: center; }
+  .btn:disabled { opacity: .45; cursor: default; }
+  .house .back { font-size: .8rem; color: var(--secondary-text-color); flex-basis: 100%; text-align: right; }
   .house { display: flex; align-items: center; gap: 12px; padding: 16px 16px 4px; flex-wrap: wrap; }
   .house .title { font-size: 1.1rem; font-weight: 500; flex: 1; color: var(--primary-text-color); }
   .seg { display: inline-flex; background: var(--secondary-background-color, rgba(127,127,127,.12)); border-radius: 999px; padding: 3px; gap: 2px; }
@@ -42,6 +46,8 @@ const STYLE = `
   .name { font-weight: 500; color: var(--primary-text-color); }
   .why { font-size: .82rem; color: var(--secondary-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .why.hot { color: var(--state-climate-heat-color, #ff8100); }
+  .why.warn { color: var(--warning-color, #ffa600); white-space: normal; }
+  .round:disabled { opacity: .35; cursor: default; }
   .temps { text-align: right; }
   .now { font-size: 1.35rem; font-weight: 500; color: var(--primary-text-color); line-height: 1.1; }
   .aim { font-size: .8rem; color: var(--secondary-text-color); }
@@ -83,7 +89,13 @@ class HearthCard extends HTMLElement {
     this._sig = "";
     this.shadowRoot.addEventListener("click", (ev) => {
       const el = ev.target.closest("[data-action]");
-      if (el) { ev.stopPropagation(); this._act(el); }
+      if (el && !el.disabled) { ev.stopPropagation(); this._act(el); }
+    });
+    // A room's row opens from the keyboard too.
+    this.shadowRoot.addEventListener("keydown", (ev) => {
+      if (ev.key !== "Enter" && ev.key !== " ") return;
+      const el = ev.target.closest?.('[role="button"][data-action]');
+      if (el && el === ev.target) { ev.preventDefault(); this._act(el); }
     });
   }
 
@@ -180,7 +192,14 @@ class HearthCard extends HTMLElement {
       case "mode": this._call("climate", "set_hvac_mode", { entity_id: id, hvac_mode: value }); break;
       case "boost": this._call("hearth", "boost", { entity_id: id }); break;
       case "unboost": this._call("hearth", "cancel_boost", { entity_id: id }); break;
-      case "house": this._call("select", "select_option", { entity_id: this._houseEntity(), option: value }); break;
+      case "house": {
+        const house = this._hass.states[this._houseEntity()];
+        if (value === house?.state) break;
+        // Holiday drops every room at once: worth a second look.
+        if (value === "holiday" && !confirm(`Put the house on Holiday? Every room is kept above ${deg(house?.attributes?.holiday_temp ?? 10)} until you switch back. (Set a day to come back in the Hearth panel.)`)) break;
+        this._call("select", "select_option", { entity_id: this._houseEntity(), option: value });
+        break;
+      }
       case "schedule": this._openEditor(id); break;
       default: break;
     }
@@ -193,8 +212,9 @@ class HearthCard extends HTMLElement {
     const house = this._houseEntity();
     const single = !!this._config.entity;
     const houseRow = !single && this._config.show_house && house && this._hass.states[house]
-      ? `<div class="house"><div class="title">${esc(this._config.title || "Heating")}</div>${this._seg(HOUSE, this._hass.states[house].state, "house", "")}</div>`
-      : "";
+      ? `<div class="house"><div class="title">${esc(this._config.title || "Heating")}</div>${this._seg(HOUSE, this._hass.states[house].state, "house", "")}${
+        holidayBack(this._hass.states[house]) ? `<div class="back">Holiday · ${esc(holidayBack(this._hass.states[house]))}</div>` : ""}</div>`
+      : !single && this._config.title ? `<div class="house"><div class="title">${esc(this._config.title)}</div></div>` : "";
     this.shadowRoot.innerHTML = `<style>${STYLE}</style>
       <ha-card class="${single ? "single" : ""}">${houseRow}
         ${rooms.map((id) => this._room(id)).join("") || `<div class="empty">No Hearth rooms yet. Add them from Hearth in the sidebar.</div>`}
@@ -218,27 +238,32 @@ class HearthCard extends HTMLElement {
     const icon = a.kind === "underfloor" ? "mdi:heating-coil" : "mdi:radiator";
     const boosting = a.preset_mode === "boost";
     // While it heats, say how long; otherwise, what it's doing and why.
-    const line = pending !== undefined ? `Setting ${deg(pending)}…` : hot || s.state === "off" ? statusOf(s) : a.reason || statusOf(s);
-    const row = `<div class="row" data-action="toggle" data-id="${esc(id)}" role="button" aria-expanded="${open}">
+    const problem = problemOf(s);
+    const off = isOff(s);
+    const line = pending !== undefined ? `Setting ${deg(pending)}…` : problem || (hot || s.state === "off" ? statusOf(s) : a.reason || statusOf(s));
+    const row = `<div class="row" data-action="toggle" data-id="${esc(id)}" role="button" ${this._config.entity ? "" : 'tabindex="0"'} aria-expanded="${open}">
         <div class="icon ${hot ? "heating" : ""} ${s.state === "off" ? "off" : ""}"><ha-icon icon="${hot ? "mdi:fire" : icon}"></ha-icon></div>
-        <div class="names"><div class="name">${esc(a.friendly_name || id)}</div><div class="why ${hot ? "hot" : ""}">${esc(line)}</div></div>
-        <div class="temps"><div class="now">${deg(a.current_temperature)}</div><div class="aim">→ ${deg(target)}</div></div>
+        <div class="names"><div class="name">${esc(a.friendly_name || id)}</div><div class="why ${problem && pending === undefined ? "warn" : hot ? "hot" : ""}">${esc(line)}</div></div>
+        <div class="temps"><div class="now">${deg(a.current_temperature)}</div><div class="aim">${off ? "off" : `→ ${deg(target)}`}</div></div>
       </div>`;
     if (!open) return `<div class="room">${row}</div>`;
     const house = this._hass.states[this._houseEntity()];
+    const lock = off ? "" : houseLock(house, s);
+    const still = off || lock ? "disabled" : "";
     const controls = `<div class="controls">
-        ${hot && reasonOf(s) ? `<div class="reason">${esc(reasonOf(s))}</div>` : ""}
+        ${(hot || problem) && reasonOf(s) ? `<div class="reason">${esc(reasonOf(s))}</div>` : ""}
         <div class="dial">
-          <button class="round" data-action="minus" data-id="${esc(id)}" aria-label="Cooler">−</button>
-          <div class="target"><div class="big">${deg(target)}</div><div class="label">${esc(targetLabel(s))}</div></div>
-          <button class="round" data-action="plus" data-id="${esc(id)}" aria-label="Warmer">+</button>
+          <button class="round" data-action="minus" data-id="${esc(id)}" aria-label="Cooler" ${still}>−</button>
+          <div class="target"><div class="big">${off ? "Off" : deg(target)}</div><div class="label">${esc(off ? `kept above ${deg(a.temperature)}` : targetLabel(s))}</div></div>
+          <button class="round" data-action="plus" data-id="${esc(id)}" aria-label="Warmer" ${still}>+</button>
         </div>
+        ${lock ? `<div class="lock">${esc(lock)}</div>` : ""}
         ${this._seg(MODES, s.state, "mode", id, true)}
         ${a.schedule ? `<div>${stripHtml(todayBlocks(s), { now: nowPct() })}${TICKS}</div>` : ""}
         <div class="actions">
           ${boosting
             ? `<button class="btn hot" data-action="unboost" data-id="${esc(id)}"><ha-icon icon="mdi:fire-off"></ha-icon>Stop boost</button>`
-            : `<button class="btn" data-action="boost" data-id="${esc(id)}"><ha-icon icon="mdi:fire"></ha-icon>Boost ${esc(boostLabel(house))}</button>`}
+            : `<button class="btn" data-action="boost" data-id="${esc(id)}" ${house?.state === "holiday" ? "disabled" : ""}><ha-icon icon="mdi:fire"></ha-icon>Boost ${esc(boostLabel(house, s))}</button>`}
           <button class="btn" data-action="schedule" data-id="${esc(id)}"><ha-icon icon="mdi:calendar-clock"></ha-icon>Schedule</button>
         </div>
       </div>`;

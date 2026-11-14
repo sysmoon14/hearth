@@ -102,6 +102,26 @@
           "description": "The Hearth room or rooms."
         }
       }
+    },
+    "set_holiday": {
+      "name": "Start a holiday",
+      "description": "Put the house on Holiday: every room is kept above the holiday temperature. Give it the moment it ends and the house goes back to Home by itself.",
+      "fields": {
+        "until": {
+          "name": "Back at",
+          "description": "When the house goes back to Home. Leave empty to stay on Holiday until it's changed."
+        }
+      }
+    }
+  },
+  "issues": {
+    "room_problem": {
+      "title": "Hearth · {room}: {problem}",
+      "description": "{room} has had this problem for a while: {problem}.\\n\\nOpen Hearth in the sidebar to see the room. This goes by itself once the problem does."
+    },
+    "switch_unavailable": {
+      "title": "Hearth can't ask the boiler for heat",
+      "description": "The Call for heat switch ({switch}) is unavailable, so Hearth can't turn the heating for the radiators on or off. This goes by itself once the switch is back."
     }
   }
 }

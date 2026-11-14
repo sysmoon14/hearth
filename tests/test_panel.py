@@ -53,13 +53,24 @@ async def test_add_change_and_remove_a_room(hass: HomeAssistant, house, calls, h
     assert hass.states.get("climate.kitchen_2") is not None or hass.states.get("climate.kitchen_3") is not None
 
     # A name that's taken gets its own id.
-    await ws.send_json({"id": 2, "type": "hearth/save_room", "room": {"name": "Office", "kind": "radiator", "trvs": [OFFICE_TRV]}})
+    await ws.send_json({"id": 2, "type": "hearth/save_room", "room": {"name": "Office", "kind": "radiator", "trvs": ["climate.spare_trv"], "warm_early": False}})
     msg = await ws.receive_json()
     assert msg["result"]["id"] == "office_2"
     await hass.async_block_till_done()
+    assert next(z for z in entry.options["zones"] if z["id"] == "office_2")["warm_early"] is False
+
+    # A valve heats one room, a Hearth room isn't a valve, and a stat isn't one either.
+    for n, (trvs, why) in enumerate((
+        ([OFFICE_TRV], "already heats Office"),
+        (["climate.office"], "is a Hearth room"),
+        ([KITCHEN], "is a Heatmiser stat"),
+    )):
+        await ws.send_json({"id": 20 + n, "type": "hearth/save_room", "room": {"name": "Landing", "kind": "radiator", "trvs": trvs}})
+        msg = await ws.receive_json()
+        assert not msg["success"] and why in msg["error"]["message"], msg
 
     # Changing a room keeps its id; clearing its sensor removes it.
-    await ws.send_json({"id": 3, "type": "hearth/save_room",
+    await ws.send_json({"id": 40, "type": "hearth/save_room",
                         "room": {"id": "office", "name": "Study", "kind": "radiator", "trvs": [OFFICE_TRV], "sensor": None}})
     msg = await ws.receive_json()
     assert msg["success"], msg
@@ -68,7 +79,7 @@ async def test_add_change_and_remove_a_room(hass: HomeAssistant, house, calls, h
     assert office["name"] == "Study"
     assert "sensor" not in office
 
-    await ws.send_json({"id": 4, "type": "hearth/remove_room", "room_id": "office_2"})
+    await ws.send_json({"id": 41, "type": "hearth/remove_room", "room_id": "office_2"})
     assert (await ws.receive_json())["success"]
     await hass.async_block_till_done()
     assert [z["id"] for z in entry.options["zones"]] == ["office", "kitchen"]
