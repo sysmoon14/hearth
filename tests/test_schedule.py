@@ -7,6 +7,7 @@ import pytest
 from custom_components.hearth.schedule import (
     ScheduleError,
     next_change,
+    next_setting,
     normalise,
     normalise_day,
     parse_valve_day,
@@ -32,6 +33,16 @@ def test_temp_at_and_carry_over() -> None:
 def test_next_change_crosses_days() -> None:
     when, temp = next_change(SCHEDULE, datetime(2026, 11, 13, 23, 0))
     assert (when, temp) == (datetime(2026, 11, 14, 8, 0), 20)
+
+
+def test_next_setting_counts_one_that_changes_nothing() -> None:
+    sunday_16 = normalise({"weekdays": [{"time": "08:30", "temp": 21}, {"time": "15:00", "temp": 16}],
+                           "weekends": [{"time": "07:00", "temp": 16}]})
+    night = datetime(2026, 11, 15, 2, 45)  # Sunday, after a 16° Saturday
+    assert next_setting(sunday_16, night) == (datetime(2026, 11, 15, 7, 0), 16)
+    assert next_change(sunday_16, night) == (datetime(2026, 11, 16, 8, 30), 21)
+    # Where the next setting is a change, they agree.
+    assert next_setting(SCHEDULE, datetime(2026, 11, 13, 23, 0)) == next_change(SCHEDULE, datetime(2026, 11, 13, 23, 0))
 
 
 def test_normalise_merges_and_limits() -> None:

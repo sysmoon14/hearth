@@ -2,7 +2,7 @@
 // edits the same way wherever it's shown: the words for what a room is doing,
 // the colours for temperatures, a day's blocks, and the schedule editor.
 
-export const VERSION = "1.0.0b5";
+export const VERSION = "1.0.0b6";
 export const MAX_CHANGES = 6;
 export const DAYS = [["weekdays", "Weekdays · Mon–Fri"], ["weekends", "Weekends · Sat–Sun"]];
 

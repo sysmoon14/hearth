@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.0.0b6
+
+- A + or − on a schedule now lasts until the schedule next sets a temperature, even one the room is already on. A room turned down to 14° at night on a 16° evening went back to 16° at the weekend's 07:00, instead of staying at 14° until Monday's first change. Heatmiser stats already ended it there, and Hearth kept putting the override back.
 ## 1.0.0b5
 
 - A new action, `hearth.add_warm_up`, tells a room about a warm-up it didn't time itself (how far it rose, and how long that took), so a room that's still learning can start early straight away. What it's told counts until the room has seen two warm-ups of its own.
