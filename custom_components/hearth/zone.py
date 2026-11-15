@@ -73,6 +73,7 @@ from .schedule import (
     Schedule,
     ScheduleError,
     next_change,
+    next_setting,
     normalise,
     parse_valve_day,
     temp_at,
@@ -440,7 +441,9 @@ class Zone:
             await self._changed(sync=False)
             return
         if self.state.mode == MODE_SCHEDULE:
-            upcoming = self.next_scheduled(now)
+            # Until the schedule next sets a temperature, even the one the
+            # room was already on: a 07:00 16° after a 16° night ends it.
+            upcoming = next_setting(self.state.schedule, dt_util.as_local(now))
             self.state.override_temp = temp
             self.state.override_until = upcoming[0] if upcoming else now + timedelta(hours=12)
             await self._override(temp)
@@ -664,15 +667,15 @@ class RadiatorZone(Zone):
     def _warm_early(self, now: datetime, base: float) -> tuple[float, str] | None:
         st = self.state
         upcoming = self.next_scheduled(now)
-        # A + or - on the card lasts until the next change, so it doesn't
-        # stop the room warming in time for that change. Anything longer does.
+        # A + or - on the card ends by the next change, so it doesn't stop
+        # the room warming in time for that change. Anything longer does.
         overridden = st.override_until is not None and now < st.override_until
         if (
             not self.warms_early()
             or st.mode != MODE_SCHEDULE
             or self.hub.house_mode != HOUSE_HOME
             or self.boost_active(now)
-            or (overridden and (upcoming is None or st.override_until != upcoming[0]))
+            or (overridden and (upcoming is None or st.override_until > upcoming[0]))
         ):
             self._early_for = None
             return None

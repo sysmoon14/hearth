@@ -141,3 +141,12 @@ def next_change(schedule: Schedule, when: datetime) -> tuple[datetime, float] | 
         if moment > when and temp != now_temp:
             return moment, temp
     return None
+
+
+def next_setting(schedule: Schedule, when: datetime) -> tuple[datetime, float] | None:
+    """When the schedule next sets a temperature, and what, even one that's
+    already in force: a + or - lasts until then."""
+    for moment, temp in _moments(schedule, when, 8):
+        if moment > when:
+            return moment, temp
+    return None

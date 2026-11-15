@@ -80,6 +80,34 @@ async def test_plus_minus_overrides_until_next_change(hass: HomeAssistant, house
     assert hass.states.get(ROOM).attributes["temperature"] == 16
 
 
+async def test_plus_minus_ends_at_a_setting_that_doesnt_change_the_temperature(hass: HomeAssistant, house, calls, freezer) -> None:
+    # The office's own schedule: weekends are 16° from 07:00, after a 16°
+    # Friday night, so 07:00 sets 16° without changing anything.
+    freezer.move_to(dt_util.as_utc(dt_util.parse_datetime("2026-11-15T02:45:00+00:00")))  # Sunday
+    await _setup(hass, calls, [OFFICE])
+    await hass.services.async_call(
+        "hearth", "set_schedule",
+        {"entity_id": ROOM,
+         "weekdays": [{"time": "08:30", "temp": 21}, {"time": "10:30", "temp": 16}, {"time": "13:00", "temp": 21}, {"time": "15:00", "temp": 16}],
+         "weekends": [{"time": "07:00", "temp": 16}]},
+        blocking=True,
+    )
+    await hass.services.async_call("climate", "set_temperature", {"entity_id": ROOM, "temperature": 14}, blocking=True)
+    await hass.async_block_till_done()
+    room = hass.states.get(ROOM)
+    assert room.attributes["temperature"] == 14
+    assert room.attributes["override_until"] == "2026-11-15T07:00:00+00:00"  # not Monday 08:30
+    assert room.attributes["reason"] == "14° until 07:00, then 16°"
+
+    freezer.move_to(dt_util.as_utc(dt_util.parse_datetime("2026-11-15T07:00:30+00:00")))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    room = hass.states.get(ROOM)
+    assert room.attributes["temperature"] == 16
+    assert room.attributes["override_until"] is None
+    assert room.attributes["reason"] == "16° until tomorrow 08:30, then 21°"
+
+
 async def test_turning_the_valve_by_hand(hass: HomeAssistant, house, calls, freezer) -> None:
     freezer.move_to(dt_util.as_utc(dt_util.parse_datetime("2026-11-13T07:30:00+00:00")))
     await _setup(hass, calls, [OFFICE])
