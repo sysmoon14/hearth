@@ -105,6 +105,28 @@ async def test_heats_when_the_radiators_are_quiet_and_stops_when_one_asks(hass: 
     assert hass.states.get(BOOST).state == "30"
 
 
+async def test_starts_while_the_boiler_is_still_held_on_for_the_radiators(hass: HomeAssistant, house, calls, freezer) -> None:
+    _at(freezer, "2026-11-16T01:00:00+00:00")
+    hass.states.async_set(OFFICE_SENSOR, "15.0")  # the office is asking for heat
+    await _setup(hass, calls, demand_off_delay=180)
+    assert hass.states.get(RELAY).state == "on"
+    assert hass.states.get(BOOST).state == "off"
+
+    # The office is warm: Hearth holds the call for heat for three minutes,
+    # and the hot water starts under it, so the boiler never stops.
+    hass.states.async_set(OFFICE_SENSOR, "18.0")
+    await hass.async_block_till_done()
+    await _pass(hass, freezer)
+    assert hass.states.get(RELAY).state == "on"
+    assert hass.states.get(BOOST).state == "30"
+    assert hass.states.get(TANK).state == "heating"
+
+    # The hold ends and the hot water carries on.
+    await _pass(hass, freezer, times=6)
+    assert hass.states.get(RELAY).state == "off"
+    assert hass.states.get(BOOST).state == "30"
+
+
 async def test_stops_once_the_tank_has_had_its_minutes(hass: HomeAssistant, house, calls, freezer) -> None:
     _at(freezer, "2026-11-16T01:00:00+00:00")
     entry = await _setup(hass, calls, hot_water_minutes=15)

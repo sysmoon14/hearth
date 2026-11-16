@@ -92,7 +92,7 @@ title: Upstairs
 
 ## Hot water
 
-Hearth can heat the hot water cylinder too, in the gaps the radiators leave, so the two never share the boiler. On the House tab, choose the boiler thermostat's **hot water boost**: a `select` whose options are `off` and lengths in minutes. While no radiator room is asking for heat, Hearth sets a 30-minute boost and renews it while the tank wants heat. The moment a room asks, it stops the boost, and it doesn't start one when a room is due to start warming within 20 minutes.
+Hearth can heat the hot water cylinder too, in the gaps the radiators leave, so the two don't share the boiler for longer than the minute or so it takes to hand over. On the House tab, choose the boiler thermostat's **hot water boost**: a `select` whose options are `off` and lengths in minutes. While no radiator room is asking for heat, Hearth sets a 30-minute boost and renews it while the tank wants heat. It starts as soon as the last room stops asking, while Hearth is still calling for heat, so the boiler goes from one to the other without stopping. The moment a room asks, it stops the boost, and it doesn't start one when a room is due to start warming within 20 minutes.
 
 When the tank wants heat depends on whether it has a sensor:
 
