@@ -20,7 +20,7 @@ from .services import async_setup_services
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = [Platform.BINARY_SENSOR, Platform.CLIMATE, Platform.SELECT]
+PLATFORMS: list[Platform] = [Platform.BINARY_SENSOR, Platform.CLIMATE, Platform.SELECT, Platform.WATER_HEATER]
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 type HearthConfigEntry = ConfigEntry[Hearth]

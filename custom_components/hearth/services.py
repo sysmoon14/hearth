@@ -15,6 +15,8 @@ from .const import (
     SERVICE_BOOST,
     HOUSE_HOLIDAY,
     SERVICE_ADD_WARM_UP,
+    SERVICE_BOOST_HOT_WATER,
+    SERVICE_STOP_HOT_WATER,
     SERVICE_CANCEL_BOOST,
     SERVICE_SET_HOLIDAY,
     SERVICE_SET_SCHEDULE,
@@ -52,6 +54,7 @@ WARM_UP_SCHEMA = vol.Schema(
         vol.Required("minutes"): vol.All(vol.Coerce(float), vol.Range(min=preheat.MIN_MINUTES, max=preheat.MAX_MINUTES)),
     }
 )
+HOT_WATER_SCHEMA = vol.Schema({vol.Optional("minutes", default=60): vol.All(vol.Coerce(int), vol.Range(min=1, max=240))})
 HOLIDAY_SCHEMA = vol.Schema({vol.Optional("until"): cv.datetime})
 
 
@@ -109,6 +112,27 @@ def async_setup_services(hass: HomeAssistant) -> None:
                 raise ServiceValidationError("A holiday has to end some time from now")
         await entries[0].runtime_data.async_set_house_mode(HOUSE_HOLIDAY, until)
 
+    def _hot_water():
+        entries = [e for e in hass.config_entries.async_entries(DOMAIN) if e.state is ConfigEntryState.LOADED]
+        if not entries:
+            raise ServiceValidationError("Hearth isn't running")
+        if (tank := entries[0].runtime_data.hot_water) is None:
+            raise ServiceValidationError("Hearth isn't heating the hot water: choose its boost on the House tab")
+        return tank
+
+    async def boost_hot_water(call: ServiceCall) -> None:
+        """Heat the hot water now, whatever the radiators are doing."""
+        tank = _hot_water()
+        await tank.async_boost(call.data["minutes"])
+        await tank.hub.async_evaluate()
+
+    async def stop_hot_water(call: ServiceCall) -> None:
+        tank = _hot_water()
+        await tank.async_stop()
+        await tank.hub.async_evaluate()
+
+    hass.services.async_register(DOMAIN, SERVICE_BOOST_HOT_WATER, boost_hot_water, HOT_WATER_SCHEMA)
+    hass.services.async_register(DOMAIN, SERVICE_STOP_HOT_WATER, stop_hot_water, vol.Schema({}))
     hass.services.async_register(DOMAIN, SERVICE_SET_HOLIDAY, set_holiday, HOLIDAY_SCHEMA)
     hass.services.async_register(DOMAIN, SERVICE_SET_SCHEDULE, set_schedule, SET_SCHEDULE_SCHEMA)
     hass.services.async_register(DOMAIN, SERVICE_BOOST, boost, BOOST_SCHEMA)

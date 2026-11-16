@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 DOMAIN = "hearth"
-VERSION = "1.0.0b6"
+VERSION = "1.0.0b7"
 
 # Zone kinds
 KIND_RADIATOR = "radiator"
@@ -61,7 +61,24 @@ CONF_OFF_DELAY = "demand_off_delay"
 # 0 turns warming up early off.
 CONF_PREHEAT_MAX = "preheat_max_minutes"
 
+# Hot water: Hearth heats the cylinder by setting a boost on the boiler's
+# thermostat (a select with "off" and lengths in minutes) while no radiator
+# room wants the boiler. Without a tank sensor it gives the cylinder so many
+# minutes of gas ahead of each "ready by" time and leaves the cylinder's own
+# thermostat to stop the boiler; with one it heats from the reheat
+# temperature up to the target.
+CONF_HW_BOOST = "hot_water_boost"
+CONF_HW_SENSOR = "hot_water_sensor"
+CONF_HW_READY = "hot_water_ready_by"
+CONF_HW_MINUTES = "hot_water_minutes"
+CONF_HW_TARGET = "hot_water_target"
+CONF_HW_REHEAT = "hot_water_reheat_below"
+
 DEFAULTS = {
+    CONF_HW_READY: ["06:30", "18:00"],
+    CONF_HW_MINUTES: 60,
+    CONF_HW_TARGET: 55.0,
+    CONF_HW_REHEAT: 45.0,
     CONF_BOOST_TEMP: 22.0,
     CONF_BOOST_MINUTES: 60,
     CONF_BOOST_MINUTES_UFH: 120,
@@ -81,6 +98,12 @@ DEMAND_ABOVE = 0.0
 # A room whose valves have all been shut this long stops asking, once it's
 # within the band: no radiator in it can take the heat.
 VALVES_SHUT_MINUTES = 5
+# A room that's within the band and hasn't got any warmer for this long stops
+# asking: the boiler was running for a room that wasn't taking the heat.
+STALL_MINUTES = 30
+# A room still well short of its target that hasn't got any warmer for this
+# long, while asking for heat, has a problem worth showing.
+NOT_WARMING_MINUTES = 90
 
 # How often an outside temperature is re-sent to a valve even if unchanged,
 # so the valve never falls back to its own sensor.
@@ -110,7 +133,24 @@ SEED_DAYS = 10
 SETTINGS = (
     CONF_BOILER_SWITCH, CONF_BOOST_TEMP, CONF_BOOST_MINUTES, CONF_BOOST_MINUTES_UFH, CONF_AWAY_TEMP, CONF_HOLIDAY_TEMP,
     CONF_OFF_TEMP, CONF_ON_DELAY, CONF_OFF_DELAY, CONF_PREHEAT_MAX, CONF_ZONES,
+    CONF_HW_BOOST, CONF_HW_SENSOR, CONF_HW_READY, CONF_HW_MINUTES, CONF_HW_TARGET, CONF_HW_REHEAT,
 )
+
+# How long before a "ready by" time the hot water may start, so it can find a
+# gap between the radiators' warm-ups.
+HW_WINDOW_HOURS = 6
+# The hot water doesn't start when a radiator room is due to start warming
+# within this long: the run would be cut off almost at once.
+HW_CLEAR_MINUTES = 20
+# The boost Hearth sets, renewed while the tank still wants heat. Short, so
+# the hot water stops by itself soon after Hearth does.
+HW_BOOST_OPTION = "30"
+# After the radiators cut a run short, how long they must stay quiet before
+# the hot water starts again.
+HW_REST_MINUTES = 5
+# A tank sensor that hasn't reported for this long isn't trusted: Hearth
+# goes back to minutes of gas until it reports again.
+HW_SENSOR_STALE_MINUTES = 45
 
 # After Hearth unloads (a reload, say), how long the call for heat is left as
 # it was for Hearth to come back, before it's turned off.
@@ -131,6 +171,8 @@ SERVICE_BOOST = "boost"
 SERVICE_CANCEL_BOOST = "cancel_boost"
 SERVICE_SET_HOLIDAY = "set_holiday"
 SERVICE_ADD_WARM_UP = "add_warm_up"
+SERVICE_BOOST_HOT_WATER = "boost_hot_water"
+SERVICE_STOP_HOT_WATER = "stop_hot_water"
 
 # A problem that lasts this long is raised as a repair in Home Assistant, so
 # it's seen without opening Hearth. Shorter ones are restarts and blips.

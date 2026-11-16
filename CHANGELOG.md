@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.0.0b7
+
+**Hot water**
+- Hearth can heat the hot water, in the gaps the radiators leave. Choose the boiler thermostat's hot water boost on the House tab (a select with "off" and lengths in minutes). While no radiator room is asking for heat, Hearth sets a 30-minute boost and renews it while the tank wants heat; the moment a room asks, it stops the boost.
+- Without a tank sensor, the tank is heated ahead of each "ready by" time (06:30 and 18:00 to start with). From six hours before, it's owed so many minutes of gas (60 to start with) and takes them whenever the radiators are quiet. The cylinder's own thermostat still stops the boiler when the tank is hot.
+- With a tank sensor chosen, the tank is heated whenever it falls below one temperature, up to another (45° and 55° to start with), at any time of day. If the sensor stops reporting for 45 minutes, Hearth goes back to minutes of gas and says so.
+- A run doesn't start when a radiator room is due to start warming within 20 minutes. After the radiators cut a run short, they have to stay quiet for 5 minutes before it starts again.
+- A boost set by hand (in the Nest app, on a dashboard, or with the new `hearth.boost_hot_water` action) is left to run whatever the radiators are doing. `hearth.stop_hot_water` stops it, whoever started it.
+- On Holiday the hot water is off. If the holiday has a day it ends, the tank is heated in the six hours before.
+- A new entity, `water_heater.hearth_hot_water`, says what the hot water is doing ("Heating for 06:30 · 40 min to go", "Waiting for the radiators: Bedroom is heating", "Next heats from 12:00, for 18:00"). The Rooms tab has a Hot water card with a Boost button.
+- A boost ends by itself, so if Hearth or Home Assistant stops, the hot water stops within 30 minutes. Hearth stops its own boost when Home Assistant shuts down.
+
+**Radiator rooms**
+- A warm-up is timed to when the room was last seen getting warmer, not to when it stopped asking for heat. A room that stopped rising just short of its target and sat there for hours counted the sitting as time taken to warm, so it learned a rate far too slow and started far too early (Rosa's room: three hours early for a rise that takes an hour and a half).
+- A room that's within 0.3° of its target and hasn't got any warmer for half an hour stops asking for heat. The boiler used to stay on for it until the schedule moved on.
+- A room that has asked for heat for an hour and a half without getting any warmer, while still well short of its target, says "Asking for heat but not getting warmer", and that's raised as a repair like any other problem.
+
 ## 1.0.0b6
 
 - A + or − on a schedule now lasts until the schedule next sets a temperature, even one the room is already on. A room turned down to 14° at night on a 16° evening went back to 16° at the weekend's 07:00, instead of staying at 14° until Monday's first change. Heatmiser stats already ended it there, and Hearth kept putting the override back.

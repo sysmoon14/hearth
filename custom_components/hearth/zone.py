@@ -48,6 +48,8 @@ from .const import (
     DEFAULT_SCHEDULE,
     DEMAND_ABOVE,
     DEMAND_BELOW,
+    NOT_WARMING_MINUTES,
+    STALL_MINUTES,
     VALVES_SHUT_MINUTES,
     EXTERNAL_REFRESH_SECONDS,
     READING_SETTLE_SECONDS,
@@ -212,8 +214,9 @@ class Zone:
         self.state = state
         self.calling = False
         self.context = Context()
-        # A warm-up being timed: when it started, from what, and to what.
-        self._warming: tuple[datetime, float, float] | None = None
+        # A warm-up being timed: when it started, from what, to what, and
+        # the warmest the room has been since, and when it got there.
+        self._warming: tuple[datetime, float, float, float, datetime] | None = None
         self._stale_logged = False
         # The sensor's reading as the room takes it (see READING_STEP), and
         # since when the sensor has said something slightly different.
@@ -339,33 +342,49 @@ class Zone:
 
     # --- how fast the room warms ------------------------------------------
     def _time_warm_up(self, now: datetime, was: bool, target: float) -> None:
-        """Time each warm-up, from asking for heat to reaching the target, by
-        the same reading the room decides it's warm by."""
+        """Time each warm-up, by the same reading the room decides it's warm
+        by: from asking for heat to the warmest it got. A room that stops
+        rising short of its target and sits there mustn't count the sitting
+        as part of how long it takes to warm."""
         room = self.room_temp()
         if room is None:
             self._warming = None
             return
         if self.calling and not was:
-            self._warming = (now, room, target)
+            self._warming = (now, room, target, room, now)
             return
         if self._warming is None:
             return
-        start, start_temp, aim = self._warming
-        minutes = (now - start).total_seconds() / 60
-        if minutes > preheat.MAX_MINUTES:
-            self._warming = None  # something else was going on: a window open, a valve shut
+        start, start_temp, aim, warmest, warmest_at = self._warming
+        if room > warmest:
+            warmest, warmest_at = room, now
+            self._warming = (start, start_temp, aim, warmest, warmest_at)
+        rose, took = warmest - start_temp, (warmest_at - start).total_seconds() / 60
+        if (now - start).total_seconds() / 60 > preheat.MAX_MINUTES:
+            # It's been asking for six hours. What it rose before it stopped
+            # rising still counts; the rest was something else going on.
+            self._warming = None
+            if preheat.counts(rose, took):
+                self.learn(WarmUp(rose, took, start, "seen"))
             return
         if target != aim:
             # The target moved before the room got there (a schedule change,
             # a tap on − or +). How far it rose so far is still a fair measure.
-            if preheat.counts(room - start_temp, minutes):
-                self.learn(WarmUp(room - start_temp, minutes, start, "seen"))
-            self._warming = (now, room, target) if self.calling else None
+            if preheat.counts(rose, took):
+                self.learn(WarmUp(rose, took, start, "seen"))
+            self._warming = (now, room, target, room, now) if self.calling else None
             return
         if not self.calling:
             self._warming = None
-            if preheat.counts(room - start_temp, minutes):
-                self.learn(WarmUp(room - start_temp, minutes, start, "seen"))
+            if preheat.counts(rose, took):
+                self.learn(WarmUp(rose, took, start, "seen"))
+
+    def not_warming_for(self, now: datetime) -> float:
+        """Minutes the room has been asking for heat without getting any
+        warmer; 0 when it isn't asking, or is still rising."""
+        if not self.calling or self._warming is None:
+            return 0.0
+        return (now - self._warming[4]).total_seconds() / 60
 
     def learn(self, warmup: WarmUp) -> None:
         self.state.warmups = preheat.add(self.state.warmups, warmup)
@@ -627,6 +646,8 @@ class RadiatorZone(Zone):
             return f"Can't heat: {'the valve is' if offline == 1 else 'the valves are'} offline"
         if offline:
             return "A valve is offline"
+        if self.not_warming_for(dt_util.utcnow()) >= NOT_WARMING_MINUTES:
+            return "Asking for heat but not getting warmer"
         return super().problem()
 
     def update_demand(self, now: datetime) -> bool:
@@ -649,7 +670,9 @@ class RadiatorZone(Zone):
             self.calling = self.valves_heating()
         elif room < target - DEMAND_BELOW:
             self.calling = True
-        elif room >= target + DEMAND_ABOVE or shut_a_while:
+        elif room >= target + DEMAND_ABOVE or shut_a_while or self.not_warming_for(now) >= STALL_MINUTES:
+            # At the target, or as near as it's going to get: within the
+            # band with the valves shut, or no warmer for half an hour.
             self.calling = False
         self._time_warm_up(now, was, target)
         return self.calling

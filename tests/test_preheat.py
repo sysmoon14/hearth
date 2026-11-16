@@ -239,7 +239,9 @@ async def test_a_warm_up_cut_short_by_the_schedule_still_counts(hass: HomeAssist
 
     await _tick(hass, freezer, "2026-11-13T10:00:30+00:00")
     assert not hass.states.get(ROOM).attributes["calling_for_heat"]
-    assert [(w.rise, w.minutes, w.source) for w in zone.state.warmups] == [(1.5, 180.0, "seen")]
+    # Timed to when it was last seen getting warmer (09:00), not to the three
+    # hours it spent asking.
+    assert [(w.rise, w.minutes, w.source) for w in zone.state.warmups] == [(1.5, 119.5, "seen")]
 
     # A rise too small to tell anything is still left out.
     hass.states.async_set(OFFICE_SENSOR, "16.0")
