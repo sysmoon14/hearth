@@ -287,7 +287,10 @@ class HotWater:
         self._count(now, ready)
         wants, idle_words = self._wants(now, ready)
         asking = self.hub.zones_calling()
-        quiet = not asking and not self.hub.demand
+        # Quiet as soon as no room is asking. Hearth keeps calling for heat
+        # for a minute or so after that, and the hot water starts under it:
+        # the boiler goes from the radiators to the tank without stopping.
+        quiet = not asking
         temp = self.tank_temp()
 
         if boost != "off" and not st.mine:
@@ -314,8 +317,7 @@ class HotWater:
             return
         if not quiet:
             self.operation = WAITING
-            who = ", ".join(asking) if asking else "the radiators"
-            self.status = f"Waiting for the radiators: {who} {'is' if len(asking) == 1 else 'are'} heating"
+            self.status = f"Waiting for the radiators: {', '.join(asking)} {'is' if len(asking) == 1 else 'are'} heating"
             return
         due_at = self.hub.radiators_due(now)
         if not may_start(True, due_at, now, timedelta(minutes=HW_CLEAR_MINUTES)):

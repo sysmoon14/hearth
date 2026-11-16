@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.0b9
+
+- The hot water starts as soon as the last radiator room stops asking for heat, not once Hearth has stopped calling for it. Hearth keeps calling for heat for a minute or so after the last room stops, so the two now overlap by that long and the boiler goes from the radiators to the tank without stopping and starting again. A room that asks again still stops the hot water at once.
+- The hot water no longer says "Waiting for the radiators: the radiators are heating" in that minute, when no room was.
+- The hot water entity uses Home Assistant's new names for its temperatures, which ends three warnings in the log.
+
 ## 1.0.0b8
 
 - The hot water settings on the House tab say what they do. The section opens with a sentence built from the settings ("Hearth heats the tank for up to 60 minutes ahead of 06:30 and 18:00, but only while no radiator room needs the boiler"). "Hot water ready by" is now "Have a hot tank by" and "Gas time before each" is "Heat it for up to", each with a line on what happens. The tank temperature sensor comes second, and with one chosen the times and minutes are marked as only used if it stops reporting.

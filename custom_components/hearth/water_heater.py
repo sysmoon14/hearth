@@ -28,7 +28,7 @@ class HotWaterTank(HearthEntity, WaterHeaterEntity):
     actions, so there's nothing to set here."""
 
     _attr_translation_key = "hot_water"
-    _attr_temperature_unit = UnitOfTemperature.CELSIUS
+    _attr_native_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_supported_features = WaterHeaterEntityFeature(0)
     _attr_min_temp = 30
     _attr_max_temp = 65
@@ -43,13 +43,19 @@ class HotWaterTank(HearthEntity, WaterHeaterEntity):
         return self.hub.hot_water.operation
 
     @property
-    def current_temperature(self) -> float | None:
+    def native_current_temperature(self) -> float | None:
         return self.hub.hot_water.tank_temp()
 
     @property
-    def target_temperature(self) -> float | None:
+    def native_target_temperature(self) -> float | None:
         tank = self.hub.hot_water
         return tank.target if tank.tank_temp() is not None else None
+
+    if not hasattr(WaterHeaterEntity, "native_current_temperature"):
+        # Home Assistant before the temperatures were renamed.
+        _attr_temperature_unit = UnitOfTemperature.CELSIUS
+        current_temperature = native_current_temperature
+        target_temperature = native_target_temperature
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
