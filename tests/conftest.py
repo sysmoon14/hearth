@@ -35,6 +35,8 @@ class Calls:
     def __init__(self, hass: HomeAssistant) -> None:
         self.hass = hass
         self.log: list[tuple[str, str, dict]] = []
+        # More stand-in entities a test wants calls recorded for.
+        self.extra: set[str] = set()
 
     def register(self, domain: str, service: str, apply=None) -> None:
         async def handler(call: ServiceCall) -> None:
@@ -49,7 +51,7 @@ class Calls:
         """Once the real climate and select services exist, send calls for the
         stand-in devices here and the rest (Hearth's own entities) to the real ones."""
         fakes = {OFFICE_TRV, KITCHEN, "select.office_trv_temperature_sensor_select",
-                 "select.kitchen_active_profile"}
+                 "select.kitchen_active_profile", *self.extra}
         for domain, services in (
             ("climate", ("set_temperature", "set_preset_mode", "set_hvac_mode")),
             ("select", ("select_option",)),

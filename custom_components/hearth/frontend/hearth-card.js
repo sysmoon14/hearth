@@ -11,7 +11,7 @@
 
 import {
   VERSION, TICKS, STRIP_STYLE, boostLabel, clamp, deg, esc, heating, holidayBack, houseLock, isOff, nowPct, problemOf, reasonOf, statusOf, stripHtml, targetLabel, todayBlocks,
-} from "./hearth-common.js?v=1.0.0b6";
+} from "./hearth-common.js?v=1.0.0b7";
 
 const MODES = [["auto", "Schedule"], ["heat", "Fixed"], ["off", "Off"]];
 const HOUSE = [["home", "Home"], ["away", "Away"], ["holiday", "Holiday"]];

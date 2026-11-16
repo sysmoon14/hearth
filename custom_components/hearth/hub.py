@@ -28,11 +28,13 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     CONF_BOILER_SWITCH,
+    CONF_HW_BOOST,
     CONF_OFF_DELAY,
     CONF_ON_DELAY,
     CONF_ZONE_ID,
     CONF_ZONES,
     DEFAULTS,
+    DEMAND_BELOW,
     DOMAIN,
     HANDOVER_SECONDS,
     HOUSE_AWAY,
@@ -47,6 +49,7 @@ from .const import (
     STORAGE_VERSION,
 )
 from . import preheat
+from .hotwater import HotWater, TankState
 from .zone import RadiatorZone, UnderfloorZone, Zone, ZoneState, make_zone
 
 _LOGGER = logging.getLogger(__name__)
@@ -75,6 +78,8 @@ class Hearth:
         self.entry = entry
         self.settings: dict[str, Any] = {**DEFAULTS, **entry.data, **entry.options}
         self.zones: dict[str, Zone] = {}
+        # The cylinder, when a hot water boost has been chosen.
+        self.hot_water: HotWater | None = None
         self.house_mode = HOUSE_HOME
         self.store: Store = HearthStore(hass, STORAGE_VERSION, STORAGE_KEY, minor_version=STORAGE_MINOR_VERSION)
         # Set once Hearth has stopped: anything of its still running (a
@@ -137,7 +142,11 @@ class Hearth:
             except Exception:  # noqa: BLE001 - one room mustn't stop the rest
                 _LOGGER.exception("%s couldn't start cleanly", zone.name)
 
+        if self.settings.get(CONF_HW_BOOST):
+            self.hot_water = HotWater(self, TankState.from_dict(stored.get("hot_water")))
         watched = {e for z in self.zones.values() for e in z.watched_entities()}
+        if self.hot_water:
+            watched.update(self.hot_water.watched_entities())
         if self.boiler_switch:
             watched.add(self.boiler_switch)
         if watched:
@@ -166,6 +175,8 @@ class Hearth:
         for issue in self._issues:
             ir.async_delete_issue(self.hass, DOMAIN, issue)
         self._issues.clear()
+        if final and self.hot_water:
+            await self.hot_water.async_shutdown()
         if not self.radiator_zones or not self.boiler_switch:
             return
         if final:
@@ -197,6 +208,7 @@ class Hearth:
             "house_mode": self.house_mode,
             "holiday_until": self.holiday_until.isoformat() if self.holiday_until else None,
             "zones": {zid: z.state.as_dict() for zid, z in self.zones.items()},
+            "hot_water": self.hot_water.state.as_dict() if self.hot_water else None,
         }
 
     async def async_fail_safe(self) -> None:
@@ -365,6 +377,11 @@ class Hearth:
                 except Exception:  # noqa: BLE001
                     _LOGGER.exception("%s: couldn't set its valves", zone.name)
             await self._update_boiler()
+            if self.hot_water:
+                try:
+                    await self.hot_water.async_update(now)
+                except Exception:  # noqa: BLE001 - the hot water mustn't stop the rooms
+                    _LOGGER.exception("Couldn't look after the hot water")
             self._update_issues()
             async_dispatcher_send(self.hass, SIGNAL_UPDATE)
 
@@ -379,6 +396,8 @@ class Hearth:
                 problem = None
             if problem:
                 problems[f"room_{zone.id}"] = ("room_problem", {"room": zone.name, "problem": problem})
+        if self.hot_water and (problem := self.hot_water.problem()):
+            problems["hot_water"] = ("hot_water_problem", {"problem": problem})
         if self.boiler_switch and self.radiator_zones and self._switch_missing:
             problems["switch_unavailable"] = ("switch_unavailable", {"switch": self.boiler_switch})
         clock = monotonic.monotonic()
@@ -402,6 +421,29 @@ class Hearth:
 
     def zones_calling(self) -> list[str]:
         return [z.name for z in self.radiator_zones if z.calling]
+
+    def radiators_due(self, now: datetime) -> datetime | None:
+        """When a radiator room will next start asking for heat by its
+        schedule: its next warmer change, or the early start for it. None
+        when nothing is coming that Hearth can see."""
+        if self.house_mode != HOUSE_HOME:
+            return None
+        soonest: datetime | None = None
+        for zone in self.radiator_zones:
+            try:
+                upcoming = zone.next_scheduled(now)
+                room = zone.room_temp()
+                if upcoming is None or zone.state.mode != "schedule" or upcoming[1] <= zone.desired(now)[0]:
+                    continue
+                if room is not None and room >= upcoming[1] - DEMAND_BELOW:
+                    continue  # already warm enough for it
+                start = (zone.warm_from(now, upcoming) if zone.warms_early() else None) or upcoming[0]
+            except Exception:  # noqa: BLE001
+                continue
+            start = min(start, upcoming[0])
+            if soonest is None or start < soonest:
+                soonest = start
+        return soonest
 
     async def _update_boiler(self) -> None:
         if not self.boiler_switch or not self.radiator_zones:
@@ -453,6 +495,10 @@ class Hearth:
             "last_boiler_command": self.last_boiler_command,
             "learning_from_history": self.seed_status,
             "settings": {k: v for k, v in self.settings.items() if k != CONF_ZONES},
+            "hot_water": {
+                "state": self.hot_water.state.as_dict(), "operation": self.hot_water.operation,
+                "boost": self.hot_water.boost_state(), **self.hot_water.attributes(now),
+            } if self.hot_water else None,
             "zones": {
                 zid: {
                     "config": z.config,

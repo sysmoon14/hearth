@@ -54,6 +54,17 @@
           }
         }
       }
+    },
+    "water_heater": {
+      "hot_water": {
+        "name": "Hot water",
+        "state": {
+          "heating": "Heating",
+          "waiting": "Waiting",
+          "idle": "Idle",
+          "off": "Off"
+        }
+      }
     }
   },
   "services": {
@@ -130,6 +141,20 @@
           "description": "How long it took, from asking for heat to getting there."
         }
       }
+    },
+    "boost_hot_water": {
+      "name": "Boost the hot water",
+      "description": "Heat the hot water now, whatever the radiators are doing. It ends by itself.",
+      "fields": {
+        "minutes": {
+          "name": "Minutes",
+          "description": "How long, rounded up to a length the boiler's thermostat offers."
+        }
+      }
+    },
+    "stop_hot_water": {
+      "name": "Stop the hot water",
+      "description": "Stop heating the hot water, whoever started it. Hearth heats it again when it next wants heat."
     }
   },
   "issues": {
@@ -140,6 +165,10 @@
     "switch_unavailable": {
       "title": "Hearth can't ask the boiler for heat",
       "description": "The Call for heat switch ({switch}) is unavailable, so Hearth can't turn the heating for the radiators on or off. This goes by itself once the switch is back."
+    },
+    "hot_water_problem": {
+      "title": "Hot water: {problem}",
+      "description": "{problem}. Hearth carries on as best it can and clears this when it's sorted."
     }
   }
 }

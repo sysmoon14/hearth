@@ -6,7 +6,7 @@
 
 import {
   VERSION, TICKS, boostLabel, clamp, copy, deg, esc, heating, holidayBack, houseLock, isOff, mins, nowPct, num, preheating, problemOf, reasonOf, statusOf, stripHtml, targetLabel, todayBlocks,
-} from "./hearth-common.js?v=1.0.0b6";
+} from "./hearth-common.js?v=1.0.0b7";
 
 const HOUSE = [["home", "Home"], ["away", "Away"], ["holiday", "Holiday"]];
 const MODES = [["auto", "Schedule"], ["heat", "Fixed"], ["off", "Off"]];
@@ -98,7 +98,7 @@ class HearthPanel extends HTMLElement {
 
   _watched() {
     const i = this._info;
-    return [i.house_mode, i.demand, i.settings.boiler_switch,
+    return [i.house_mode, i.demand, i.hot_water, i.settings.boiler_switch, i.settings.hot_water_boost,
       ...i.rooms.flatMap((r) => [r.entity_id, ...r.trvs, r.stat, r.sensor])].filter(Boolean);
   }
 
@@ -271,6 +271,18 @@ class HearthPanel extends HTMLElement {
         <div class="row between"><span class="caps">Radiators</span><span class="chip ${on ? "heat" : "ok"}">${on ? "Asking for heat" : "Idle"}</span></div>
         <div class="big">${on ? `${esc(asking.join(", ") || "A room")} ${asking.length > 1 ? "are" : "is"} asking for heat` : "No room is asking for heat"}</div>
         <div class="muted small">${how}</div></div>`);
+    }
+    const tank = this._state(i.hot_water);
+    if (tank) {
+      const a = tank.attributes || {};
+      const chip = { heating: ["heat", "Heating"], waiting: ["blue", "Waiting"], idle: ["ok", "Idle"], off: ["grey", "Off"] }[tank.state] || ["warn", "Unavailable"];
+      const temp = a.current_temperature != null ? ` · ${deg(a.current_temperature)}` : "";
+      cards.push(`<div class="card status-card ${tank.state === "heating" ? "hot" : ""}">
+        <div class="row between"><span class="caps">Hot water${temp}</span><span class="chip ${chip[0]}">${chip[1]}</span></div>
+        <div class="big">${esc(a.status || "")}</div>
+        ${a.problem ? `<div class="small" style="color:var(--hp-warn)">${esc(a.problem)}</div>` : ""}
+        <div class="row between flexwrap"><span class="muted small">${a.by === "temperature" ? "Heated by the tank's temperature" : `Ready by ${esc((a.ready_by || []).join(" and ") || "no times set")}`}, when the radiators are quiet</span>
+          <button class="btn" data-act="${a.heating ? "hw-stop" : "hw-boost"}">${a.heating ? "Stop" : "Boost 1 h"}</button></div></div>`);
     }
     if (ufh.length) {
       const heating = ufh.filter((r) => this._heating(r)).map((r) => r.name);
@@ -758,6 +770,23 @@ class HearthPanel extends HTMLElement {
           </div>
         </section>
         <section class="card stack">
+          <div class="row between flexwrap"><h2>Hot water</h2>
+            <span class="chip ${h.hot_water_boost ? "ok" : "grey"}">${h.hot_water_boost ? "Run by Hearth" : "Not run by Hearth"}</span></div>
+          <div>
+            <div class="kv"><span>Hot water boost<span class="sub">${h.hot_water_boost ? "Hearth sets a 30-minute boost while no radiator room is asking for heat, renews it while the tank wants heat, and stops it when a room asks" : "The boiler thermostat's hot water boost: a select with off and lengths in minutes. Choose it and Hearth heats the hot water when the radiators are quiet"}</span></span>
+              <span class="pick">${this._entityField("hot_water_boost", "select,input_select", "Hot water boost", h.hot_water_boost)}</span></div>
+            ${h.hot_water_boost ? `
+            <div class="kv"><label for="h-hot_water_ready_by">Hot water ready by<span class="sub">Up to four times, such as 06:30, 18:00. Hearth heats the tank in the six hours before each, whenever the radiators are quiet</span></label>
+              <span class="unit"><input id="h-hot_water_ready_by" type="text" inputmode="numeric" value="${esc((h.hot_water_ready_by || []).join(", "))}" data-house-times="hot_water_ready_by"></span></div>
+            ${secRow("hot_water_minutes", "Gas time before each", "Without a tank sensor · the cylinder's own thermostat stops the boiler sooner if the tank is hot", 15, 180, "min", 1)}
+            <div class="kv"><span>Tank sensor<span class="sub">${h.hot_water_sensor ? "Hearth heats the tank from the lower temperature up to the higher one, at any time of day" : "Optional: a temperature probe on the cylinder. With one, Hearth heats by temperature, not by time"}</span></span>
+              <span class="pick">${this._entityField("hot_water_sensor", "sensor", "Tank sensor", h.hot_water_sensor, "temperature")}</span></div>
+            ${h.hot_water_sensor ? `${tempRow("hot_water_reheat_below", "Heat the tank below", "", 30, 60)}
+            ${tempRow("hot_water_target", "Heat it up to", "Keep the cylinder's own thermostat a few degrees above this", 40, 65)}` : ""}
+            <div class="kv"><span>If Hearth stops<span class="sub">A boost ends by itself within 30 minutes. The boiler thermostat's own hot water schedule is left as it is, so it can be turned back on by hand.</span></span></div>` : ""}
+          </div>
+        </section>
+        <section class="card stack">
           <div class="row between flexwrap"><h2>Rooms</h2><button class="btn solid" data-act="add">Add a room</button></div>
           ${i.rooms.length ? i.rooms.map((r) => `<div class="kv">
             <span>${esc(r.name)}<span class="sub">${r.kind === "radiator"
@@ -857,7 +886,7 @@ class HearthPanel extends HTMLElement {
       this._render();
       return;
     }
-    if (this._house && key === "boiler_switch") {
+    if (this._house && ["boiler_switch", "hot_water_boost", "hot_water_sensor"].includes(key)) {
       this._house[key] = value || null;
       this._render();
     }
@@ -1026,6 +1055,8 @@ class HearthPanel extends HTMLElement {
       case "edit": this._openDialog(room); return;
       case "add": this._openDialog(null); return;
       case "remove": this._removeRoom(room); return;
+      case "hw-boost": this._call("hearth", "boost_hot_water", { minutes: 60 }); return;
+      case "hw-stop": this._call("hearth", "stop_hot_water", {}); return;
       case "house-save": this._saveHouse(); return;
       case "house-discard": this._house = null; this._render(); return;
       case "hist-range": this._histRange = Number(el.dataset.hours); this._render(); return;
@@ -1036,6 +1067,14 @@ class HearthPanel extends HTMLElement {
 
   _change(e) {
     const t = e.target;
+    if (t.dataset.houseTimes) {
+      // "6:30, 18.00" → ["06:30", "18:00"]; anything that isn't a time is dropped.
+      const times = t.value.split(/[\s,;]+/).map((v) => v.replace(".", ":").match(/^(\d{1,2}):(\d{2})$/))
+        .filter((m) => m && Number(m[1]) < 24 && Number(m[2]) < 60).map((m) => `${m[1].padStart(2, "0")}:${m[2]}`);
+      this._house[t.dataset.houseTimes] = [...new Set(times)].sort().slice(0, 4);
+      this._render();
+      return;
+    }
     if (t.dataset.house) {
       const key = t.dataset.house;
       this._house[key] = Number(t.value) * Number(t.dataset.scale || 1);

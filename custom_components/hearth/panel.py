@@ -28,6 +28,12 @@ from .const import (
     CONF_BOOST_MINUTES_UFH,
     CONF_BOOST_TEMP,
     CONF_HOLIDAY_TEMP,
+    CONF_HW_BOOST,
+    CONF_HW_MINUTES,
+    CONF_HW_READY,
+    CONF_HW_REHEAT,
+    CONF_HW_SENSOR,
+    CONF_HW_TARGET,
     CONF_KIND,
     CONF_NAME,
     CONF_OFF_DELAY,
@@ -55,10 +61,12 @@ PANEL_FILE = "hearth-panel.js"
 # House settings the panel can change, and what each accepts.
 TEMPS = {
     CONF_BOOST_TEMP: (15, 28), CONF_AWAY_TEMP: (5, 22), CONF_HOLIDAY_TEMP: (5, 18), CONF_OFF_TEMP: (5, 15),
+    CONF_HW_TARGET: (40, 65), CONF_HW_REHEAT: (30, 60),
 }
 SECONDS = {CONF_ON_DELAY: (0, 900), CONF_OFF_DELAY: (0, 1800), CONF_BOOST_MINUTES: (15, 240),
-           CONF_BOOST_MINUTES_UFH: (30, 480), CONF_PREHEAT_MAX: (0, 360)}
-OPTIONAL_ENTITIES = (CONF_BOILER_SWITCH,)
+           CONF_BOOST_MINUTES_UFH: (30, 480), CONF_PREHEAT_MAX: (0, 360), CONF_HW_MINUTES: (15, 180)}
+OPTIONAL_ENTITIES = (CONF_BOILER_SWITCH, CONF_HW_BOOST, CONF_HW_SENSOR)
+READY_TIME = vol.Match(r"^([01]\d|2[0-3]):[0-5]\d$")
 SWITCH_DOMAINS = ("switch", "input_boolean")
 
 
@@ -129,7 +137,8 @@ def _info(hass: HomeAssistant, entry: ConfigEntry, is_admin: bool) -> dict[str, 
         "version": VERSION,
         "is_admin": is_admin,
         "rooms": rooms,
-        "settings": {k: options.get(k) for k in (*OPTIONAL_ENTITIES, *TEMPS, *SECONDS)},
+        "settings": {k: options.get(k) for k in (*OPTIONAL_ENTITIES, *TEMPS, *SECONDS, CONF_HW_READY)},
+        "hot_water": _own(hass, entry, "hot_water", "water_heater"),
         "holiday_until": hub.holiday_until.isoformat() if hub and hub.holiday_until else None,
         "house_mode": _own(hass, entry, "house_mode", "select"),
         "demand": _own(hass, entry, "radiator_demand", "binary_sensor"),
@@ -252,6 +261,9 @@ def ws_remove_room(hass: HomeAssistant, connection: websocket_api.ActiveConnecti
 
 HOUSE = {
     vol.Optional(CONF_BOILER_SWITCH): vol.Any(None, vol.All(cv.entity_id, cv.entity_domain(SWITCH_DOMAINS))),
+    vol.Optional(CONF_HW_BOOST): vol.Any(None, vol.All(cv.entity_id, cv.entity_domain(("select", "input_select")))),
+    vol.Optional(CONF_HW_SENSOR): vol.Any(None, vol.All(cv.entity_id, cv.entity_domain("sensor"))),
+    vol.Optional(CONF_HW_READY): vol.All([READY_TIME], vol.Length(max=4)),
     **{vol.Optional(k): vol.All(vol.Coerce(float), vol.Range(min=lo, max=hi)) for k, (lo, hi) in TEMPS.items()},
     **{vol.Optional(k): vol.All(vol.Coerce(int), vol.Range(min=lo, max=hi)) for k, (lo, hi) in SECONDS.items()},
 }
