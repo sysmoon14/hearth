@@ -6,7 +6,7 @@
 
 import {
   VERSION, TICKS, boostLabel, clamp, copy, deg, esc, heating, holidayBack, houseLock, isOff, mins, nowPct, num, preheating, problemOf, reasonOf, statusOf, stripHtml, targetLabel, todayBlocks,
-} from "./hearth-common.js?v=1.0.0b7";
+} from "./hearth-common.js?v=1.0.0b8";
 
 const HOUSE = [["home", "Home"], ["away", "Away"], ["holiday", "Holiday"]];
 const MODES = [["auto", "Schedule"], ["heat", "Fixed"], ["off", "Off"]];
@@ -771,19 +771,21 @@ class HearthPanel extends HTMLElement {
         </section>
         <section class="card stack">
           <div class="row between flexwrap"><h2>Hot water</h2>
-            <span class="chip ${h.hot_water_boost ? "ok" : "grey"}">${h.hot_water_boost ? "Run by Hearth" : "Not run by Hearth"}</span></div>
+            <span class="chip ${h.hot_water_boost ? "ok" : "grey"}">${h.hot_water_boost ? "Heated by Hearth" : "Not heated by Hearth"}</span></div>
+          ${h.hot_water_boost ? `<div class="muted">${esc(this._hotWaterPlan(h))}</div>` : ""}
           <div>
-            <div class="kv"><span>Hot water boost<span class="sub">${h.hot_water_boost ? "Hearth sets a 30-minute boost while no radiator room is asking for heat, renews it while the tank wants heat, and stops it when a room asks" : "The boiler thermostat's hot water boost: a select with off and lengths in minutes. Choose it and Hearth heats the hot water when the radiators are quiet"}</span></span>
+            <div class="kv"><span>Heat the hot water with<span class="sub">${h.hot_water_boost ? "Hearth turns this on to heat the tank and off again when a room needs the boiler" : "Choose your boiler thermostat's hot water boost and Hearth will heat the tank whenever the radiators aren't using the boiler"}</span></span>
               <span class="pick">${this._entityField("hot_water_boost", "select,input_select", "Hot water boost", h.hot_water_boost)}</span></div>
             ${h.hot_water_boost ? `
-            <div class="kv"><label for="h-hot_water_ready_by">Hot water ready by<span class="sub">Up to four times, such as 06:30, 18:00. Hearth heats the tank in the six hours before each, whenever the radiators are quiet</span></label>
+            <div class="kv"><span>Tank temperature sensor<span class="sub">${h.hot_water_sensor ? "Hearth tops the tank up whenever it cools, at any time of day" : "Optional. With a probe on the tank, Hearth tops it up whenever it cools. Without one, it heats the tank ahead of the times below"}</span></span>
+              <span class="pick">${this._entityField("hot_water_sensor", "sensor", "Tank temperature sensor", h.hot_water_sensor, "temperature")}</span></div>
+            ${h.hot_water_sensor ? `${tempRow("hot_water_reheat_below", "Top up when the tank falls below", "", 30, 60)}
+            ${tempRow("hot_water_target", "Heat it until it reaches", "Set the thermostat on the tank itself a few degrees higher, as a backstop", 40, 65)}
+            <div class="kv"><span class="muted small">The two settings below are only used if the sensor stops reporting.</span></div>` : ""}
+            <div class="kv"><label for="h-hot_water_ready_by">Have a hot tank by<span class="sub">The times you need hot water, such as morning showers and evening baths. Type up to four, like 06:30, 18:00. Hearth heats the tank at some point in the six hours before each one, when no radiators are on. For 06:30 that's usually just after midnight</span></label>
               <span class="unit"><input id="h-hot_water_ready_by" type="text" inputmode="numeric" value="${esc((h.hot_water_ready_by || []).join(", "))}" data-house-times="hot_water_ready_by"></span></div>
-            ${secRow("hot_water_minutes", "Gas time before each", "Without a tank sensor · the cylinder's own thermostat stops the boiler sooner if the tank is hot", 15, 180, "min", 1)}
-            <div class="kv"><span>Tank sensor<span class="sub">${h.hot_water_sensor ? "Hearth heats the tank from the lower temperature up to the higher one, at any time of day" : "Optional: a temperature probe on the cylinder. With one, Hearth heats by temperature, not by time"}</span></span>
-              <span class="pick">${this._entityField("hot_water_sensor", "sensor", "Tank sensor", h.hot_water_sensor, "temperature")}</span></div>
-            ${h.hot_water_sensor ? `${tempRow("hot_water_reheat_below", "Heat the tank below", "", 30, 60)}
-            ${tempRow("hot_water_target", "Heat it up to", "Keep the cylinder's own thermostat a few degrees above this", 40, 65)}` : ""}
-            <div class="kv"><span>If Hearth stops<span class="sub">A boost ends by itself within 30 minutes. The boiler thermostat's own hot water schedule is left as it is, so it can be turned back on by hand.</span></span></div>` : ""}
+            ${secRow("hot_water_minutes", "Heat it for up to", "How long the boiler heats the tank before each of those times. An hour heats most tanks from cold. If the water's already hot the tank's own thermostat stops the boiler, so a long time here doesn't waste gas", 15, 180, "min", 1)}
+            <div class="kv"><span>If Hearth stops<span class="sub">The hot water stops within half an hour. To heat it without Hearth, use the boost on the thermostat, or turn the thermostat's own hot water schedule back on: Hearth never changes it.</span></span></div>` : ""}
           </div>
         </section>
         <section class="card stack">
@@ -830,6 +832,19 @@ class HearthPanel extends HTMLElement {
   }
 
   // Entity pickers ----------------------------------------------------------------
+  // What the hot water settings add up to, in a sentence.
+  _hotWaterPlan(h) {
+    const times = h.hot_water_ready_by || [];
+    const list = times.length > 1 ? `${times.slice(0, -1).join(", ")} and ${times[times.length - 1]}` : times[0];
+    const byTime = times.length
+      ? `Hearth heats the tank for up to ${Number(h.hot_water_minutes)} minutes ahead of ${list}`
+      : "No times are set, so Hearth won't heat the tank";
+    if (h.hot_water_sensor) {
+      return `Hearth heats the tank to ${deg(h.hot_water_target)} whenever it falls below ${deg(h.hot_water_reheat_below)}, but only while no radiator room needs the boiler.`;
+    }
+    return times.length ? `${byTime}, but only while no radiator room needs the boiler. A boost you start yourself always runs.` : `${byTime}.`;
+  }
+
   _entityField(key, domain, label, value, deviceClass = "") {
     if (this._pickers) {
       return `<ha-entity-picker data-pick="${esc(key)}" data-domain="${domain}" data-class="${esc(deviceClass)}" data-label="${esc(label)}" data-value="${esc(value || "")}"></ha-entity-picker>`;

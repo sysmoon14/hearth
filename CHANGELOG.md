@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.0b8
+
+- The hot water settings on the House tab say what they do. The section opens with a sentence built from the settings ("Hearth heats the tank for up to 60 minutes ahead of 06:30 and 18:00, but only while no radiator room needs the boiler"). "Hot water ready by" is now "Have a hot tank by" and "Gas time before each" is "Heat it for up to", each with a line on what happens. The tank temperature sensor comes second, and with one chosen the times and minutes are marked as only used if it stops reporting.
+
 ## 1.0.0b7
 
 **Hot water**

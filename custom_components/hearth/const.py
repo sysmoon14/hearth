@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 DOMAIN = "hearth"
-VERSION = "1.0.0b7"
+VERSION = "1.0.0b8"
 
 # Zone kinds
 KIND_RADIATOR = "radiator"
