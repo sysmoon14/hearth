@@ -65,6 +65,17 @@
           "off": "Off"
         }
       }
+    },
+    "sensor": {
+      "heated_today": {
+        "name": "Heated today"
+      },
+      "heated_week": {
+        "name": "Heated this week"
+      },
+      "cost_today": {
+        "name": "Heating cost today"
+      }
     }
   },
   "services": {

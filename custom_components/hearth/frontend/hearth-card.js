@@ -10,10 +10,10 @@
  */
 
 import {
-  VERSION, TICKS, STRIP_STYLE, boostLabel, clamp, deg, esc, heating, holidayBack, houseLock, isOff, nowPct, problemOf, reasonOf, statusOf, stripHtml, targetLabel, todayBlocks,
-} from "./hearth-common.js?v=1.0.0b12";
+  VERSION, TICKS, STRIP_STYLE, boostLabel, clamp, deg, esc, heatedOf, heating, holidayBack, houseLock, isOff, nowPct, problemOf, reasonOf, statusOf, stripHtml, targetLabel, todayBlocks,
+} from "./hearth-common.js?v=1.0.0b13";
 // The hot water card comes with this one, so dashboards need nothing more.
-import "./hearth-hot-water-card.js?v=1.0.0b12";
+import "./hearth-hot-water-card.js?v=1.0.0b13";
 
 const MODES = [["auto", "Schedule"], ["heat", "Fixed"], ["off", "Off"]];
 const HOUSE = [["home", "Home"], ["away", "Away"], ["holiday", "Holiday"]];
@@ -55,6 +55,7 @@ const STYLE = `
   .aim { font-size: .8rem; color: var(--secondary-text-color); }
   .controls { padding: 4px 16px 16px; display: grid; gap: 14px; }
   .reason { font-size: .85rem; color: var(--secondary-text-color); text-align: center; }
+  .heated { font-size: .8rem; color: var(--secondary-text-color); text-align: center; }
   .dial { display: flex; align-items: center; justify-content: center; gap: 20px; }
   .round { width: 52px; height: 52px; border-radius: 50%; border: 1px solid var(--divider-color);
     background: transparent; color: var(--primary-text-color); font-size: 1.6rem; cursor: pointer; display: grid; place-items: center; }
@@ -262,6 +263,7 @@ class HearthCard extends HTMLElement {
         ${lock ? `<div class="lock">${esc(lock)}</div>` : ""}
         ${this._seg(MODES, s.state, "mode", id, true)}
         ${a.schedule ? `<div>${stripHtml(todayBlocks(s), { now: nowPct() })}${TICKS}</div>` : ""}
+        ${heatedOf(s, this._hass.config?.currency) ? `<div class="heated">${esc(heatedOf(s, this._hass.config?.currency))}</div>` : ""}
         <div class="actions">
           ${boosting
             ? `<button class="btn hot" data-action="unboost" data-id="${esc(id)}"><ha-icon icon="mdi:fire-off"></ha-icon>Stop boost</button>`

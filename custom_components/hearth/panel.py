@@ -21,6 +21,9 @@ from homeassistant.helpers import config_validation as cv, entity_registry as er
 from homeassistant.util import slugify
 
 from .const import (
+    CONF_BOILER_KW,
+    CONF_GAS_PRICE,
+    CONF_GAS_PRICE_ENTITY,
     CARD_FILE,
     CONF_AWAY_TEMP,
     CONF_BOILER_SWITCH,
@@ -66,7 +69,9 @@ TEMPS = {
 }
 SECONDS = {CONF_ON_DELAY: (0, 900), CONF_OFF_DELAY: (0, 1800), CONF_BOOST_MINUTES: (15, 240),
            CONF_BOOST_MINUTES_UFH: (30, 480), CONF_PREHEAT_MAX: (0, 360), CONF_HW_MINUTES: (15, 180)}
-OPTIONAL_ENTITIES = (CONF_BOILER_SWITCH, CONF_HW_SWITCH, CONF_HW_SENSOR)
+OPTIONAL_ENTITIES = (CONF_BOILER_SWITCH, CONF_HW_SWITCH, CONF_HW_SENSOR, CONF_GAS_PRICE_ENTITY)
+# What heating costs: optional, and None clears them.
+COSTS = {CONF_BOILER_KW: (1, 60), CONF_GAS_PRICE: (0, 100)}
 READY_TIME = vol.Match(r"^([01]\d|2[0-3]):[0-5]\d$")
 SWITCH_DOMAINS = ("switch", "input_boolean")
 
@@ -138,7 +143,7 @@ def _info(hass: HomeAssistant, entry: ConfigEntry, is_admin: bool) -> dict[str, 
         "version": VERSION,
         "is_admin": is_admin,
         "rooms": rooms,
-        "settings": {k: options.get(k) for k in (*OPTIONAL_ENTITIES, *TEMPS, *SECONDS, CONF_HW_READY)},
+        "settings": {k: options.get(k) for k in (*OPTIONAL_ENTITIES, *TEMPS, *SECONDS, *COSTS, CONF_HW_READY)},
         "hot_water": _own(hass, entry, "hot_water", "water_heater"),
         "holiday_until": hub.holiday_until.isoformat() if hub and hub.holiday_until else None,
         "house_mode": _own(hass, entry, "house_mode", "select"),
@@ -265,6 +270,8 @@ HOUSE = {
     vol.Optional(CONF_HW_SWITCH): vol.Any(None, vol.All(cv.entity_id, cv.entity_domain(SWITCH_DOMAINS))),
     vol.Optional(CONF_HW_SENSOR): vol.Any(None, vol.All(cv.entity_id, cv.entity_domain("sensor"))),
     vol.Optional(CONF_HW_READY): vol.All([READY_TIME], vol.Length(max=4)),
+    vol.Optional(CONF_GAS_PRICE_ENTITY): vol.Any(None, vol.All(cv.entity_id, cv.entity_domain(("sensor", "input_number")))),
+    **{vol.Optional(k): vol.Any(None, vol.All(vol.Coerce(float), vol.Range(min=lo, max=hi))) for k, (lo, hi) in COSTS.items()},
     **{vol.Optional(k): vol.All(vol.Coerce(float), vol.Range(min=lo, max=hi)) for k, (lo, hi) in TEMPS.items()},
     **{vol.Optional(k): vol.All(vol.Coerce(int), vol.Range(min=lo, max=hi)) for k, (lo, hi) in SECONDS.items()},
 }

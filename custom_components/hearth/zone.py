@@ -69,7 +69,7 @@ from .const import (
     WEEKDAYS,
     WEEKENDS,
 )
-from . import preheat
+from . import preheat, usage
 from .preheat import WarmUp
 from .schedule import (
     Schedule,
@@ -162,6 +162,8 @@ class ZoneState:
     warmups: list[WarmUp] = field(default_factory=list)
     learned_with: str | None = None
     seeded: bool = False
+    # How long the room heated, by day (see usage.py).
+    heated: usage.Days = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -175,6 +177,7 @@ class ZoneState:
             "warmups": [w.as_dict() for w in self.warmups],
             "learned_with": self.learned_with,
             "seeded": self.seeded,
+            "heated": self.heated,
         }
 
     @classmethod
@@ -197,6 +200,7 @@ class ZoneState:
         state.warmups = [w for d in data.get("warmups") or [] if (w := WarmUp.from_dict(d))]
         state.learned_with = data.get("learned_with")
         state.seeded = bool(data.get("seeded"))
+        state.heated = usage.clean(data.get("heated"))
         return state
 
 
@@ -574,6 +578,30 @@ class Zone:
             "room_sensor": self.sensor,
             "room_sensor_stale": self.sensor_stale(),
             "problem": self.problem(),
+            **self.usage_attributes(now),
+        }
+
+    def heated(self, now: datetime) -> dict[str, float | None]:
+        """Minutes heated today and this week, and what today cost."""
+        day = dt_util.as_local(now).date()
+        minutes, share = usage.today(self.state.heated, day)
+        week, week_share = usage.week(self.state.heated, day)
+        price = self.hub.gas_price()
+        kw = self.hub.boiler_kw()
+        return {
+            "today": minutes,
+            "week": week,
+            "cost_today": usage.cost(share, kw, price),
+            "cost_week": usage.cost(week_share, kw, price),
+        }
+
+    def usage_attributes(self, now: datetime) -> dict[str, Any]:
+        h = self.heated(now)
+        return {
+            "heated_today": round(h["today"]),
+            "heated_week": round(h["week"]),
+            "cost_today": round(h["cost_today"], 2) if h["cost_today"] is not None else None,
+            "cost_week": round(h["cost_week"], 2) if h["cost_week"] is not None else None,
         }
 
     async def _call(self, domain: str, service: str, data: dict[str, Any]) -> bool:
