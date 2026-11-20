@@ -29,6 +29,7 @@ from .const import (
     CONF_BOOST_TEMP,
     CONF_HOLIDAY_TEMP,
     CONF_HW_SWITCH,
+    CONF_HW_FLOOR,
     CONF_HW_MINUTES,
     CONF_HW_READY,
     CONF_HW_REHEAT,
@@ -61,7 +62,7 @@ PANEL_FILE = "hearth-panel.js"
 # House settings the panel can change, and what each accepts.
 TEMPS = {
     CONF_BOOST_TEMP: (15, 28), CONF_AWAY_TEMP: (5, 22), CONF_HOLIDAY_TEMP: (5, 18), CONF_OFF_TEMP: (5, 15),
-    CONF_HW_TARGET: (40, 65), CONF_HW_REHEAT: (30, 60),
+    CONF_HW_TARGET: (40, 65), CONF_HW_REHEAT: (30, 60), CONF_HW_FLOOR: (25, 55),
 }
 SECONDS = {CONF_ON_DELAY: (0, 900), CONF_OFF_DELAY: (0, 1800), CONF_BOOST_MINUTES: (15, 240),
            CONF_BOOST_MINUTES_UFH: (30, 480), CONF_PREHEAT_MAX: (0, 360), CONF_HW_MINUTES: (15, 180)}

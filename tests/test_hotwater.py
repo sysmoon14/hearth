@@ -309,3 +309,46 @@ async def test_a_room_that_stalls_stops_asking_and_learns_from_the_rise(hass: Ho
     (warmup,) = zone.state.warmups
     assert round(warmup.rise, 1) == 1.8
     assert 58 <= warmup.minutes <= 62
+
+
+async def test_too_cold_to_wait_heats_alongside_the_radiators(hass: HomeAssistant, house, calls, freezer) -> None:
+    _at(freezer, "2026-11-16T08:00:00+00:00")
+    hass.states.async_set(OFFICE_SENSOR, "15.0")  # the office is asking for heat
+    hass.states.async_set(PROBE, "44.0", {"device_class": "temperature"})
+    await _setup(hass, calls, hot_water_sensor=PROBE, hot_water_reheat_below=50, hot_water_heat_anyway_below=40)
+    # Below the top-up line but above "too cold": it waits for the radiators.
+    assert hass.states.get(RELAY).state == "on"
+    assert hass.states.get(HW).state == "off"
+    assert hass.states.get(TANK).state == "waiting"
+
+    # Below 40°: it heats at once, sharing the boiler.
+    hass.states.async_set(PROBE, "39.0", {"device_class": "temperature"})
+    await hass.async_block_till_done()
+    await _pass(hass, freezer)
+    assert hass.states.get(HW).state == "on"
+    assert hass.states.get(RELAY).state == "on"
+    tank = hass.states.get(TANK)
+    assert tank.state == "heating"
+    assert tank.attributes["status"] == "Too cold to wait: heating to 50° alongside the radiators · 39° now"
+
+    # Climbing past 40° it carries on, up to the top-up line.
+    hass.states.async_set(PROBE, "46.0", {"device_class": "temperature"})
+    await hass.async_block_till_done()
+    await _pass(hass, freezer)
+    assert hass.states.get(HW).state == "on"
+
+    # Back to 50°: the rest waits for a gap in the radiators.
+    hass.states.async_set(PROBE, "50.0", {"device_class": "temperature"})
+    await hass.async_block_till_done()
+    await _pass(hass, freezer)
+    assert hass.states.get(HW).state == "off"
+    assert hass.states.get(TANK).state == "waiting"
+
+
+def test_the_floor_stays_below_the_top_up_line() -> None:
+    class Hub:
+        settings = {"hot_water_switch": HW, "hot_water_target": 55, "hot_water_reheat_below": 45,
+                    "hot_water_heat_anyway_below": 48}
+        hass = None
+    tank = hotwater.HotWater(Hub(), hotwater.TankState())
+    assert tank.heat_anyway_below == 44

@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.0b11
+
+- **Too cold to wait.** With a tank sensor, a third temperature (40° to start with): if the tank falls below it, the hot water no longer waits for the radiators. The boiler heats the rooms and the tank together until the tank is back to the top-up temperature, then the rest waits for a gap as before. The tank says "Too cold to wait: heating to 50° alongside the radiators" while it does, and has a new `heat_anyway_below` attribute.
+- **The hot water settings on the House tab are rebuilt to read on their own.** A plain sentence at the top says what Hearth will do. Then "What heats it" (the switch and the sensor), then "How hot", the three temperatures as a ladder, warmest at the top, each saying what happens there. The clock settings, which do nothing while a tank sensor works, are folded under "If the tank sensor stops working". Without a sensor they're shown as "When to heat it".
+
 ## 1.0.0b10
 
 - The hot water is heated with a **Call for hot water switch** (Fledge 0.21's, on a Nest), not by setting the thermostat's hot water boost. Hearth turns the switch on while the tank wants heat and the radiators are quiet, and off when a room asks; Fledge keeps the Nest's hot water going while it's on, on a ten-minute lease, so if Home Assistant stops the hot water stops within ten minutes. Hearth no longer renews boosts, waits for the thermostat to show them, or rounds lengths to the boost's options.

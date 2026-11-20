@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 DOMAIN = "hearth"
-VERSION = "1.0.0b10"
+VERSION = "1.0.0b11"
 
 # Zone kinds
 KIND_RADIATOR = "radiator"
@@ -75,12 +75,17 @@ CONF_HW_READY = "hot_water_ready_by"
 CONF_HW_MINUTES = "hot_water_minutes"
 CONF_HW_TARGET = "hot_water_target"
 CONF_HW_REHEAT = "hot_water_reheat_below"
+# With a tank sensor: below this the hot water doesn't wait for the
+# radiators. The boiler heats both until the tank is back to the reheat
+# temperature.
+CONF_HW_FLOOR = "hot_water_heat_anyway_below"
 
 DEFAULTS = {
     CONF_HW_READY: ["06:30", "18:00"],
     CONF_HW_MINUTES: 60,
     CONF_HW_TARGET: 55.0,
     CONF_HW_REHEAT: 45.0,
+    CONF_HW_FLOOR: 40.0,
     CONF_BOOST_TEMP: 22.0,
     CONF_BOOST_MINUTES: 60,
     CONF_BOOST_MINUTES_UFH: 120,
@@ -135,7 +140,7 @@ SEED_DAYS = 10
 SETTINGS = (
     CONF_BOILER_SWITCH, CONF_BOOST_TEMP, CONF_BOOST_MINUTES, CONF_BOOST_MINUTES_UFH, CONF_AWAY_TEMP, CONF_HOLIDAY_TEMP,
     CONF_OFF_TEMP, CONF_ON_DELAY, CONF_OFF_DELAY, CONF_PREHEAT_MAX, CONF_ZONES,
-    CONF_HW_SWITCH, CONF_HW_SENSOR, CONF_HW_READY, CONF_HW_MINUTES, CONF_HW_TARGET, CONF_HW_REHEAT,
+    CONF_HW_SWITCH, CONF_HW_SENSOR, CONF_HW_READY, CONF_HW_MINUTES, CONF_HW_TARGET, CONF_HW_REHEAT, CONF_HW_FLOOR,
 )
 
 # How long before a "ready by" time the hot water may start, so it can find a

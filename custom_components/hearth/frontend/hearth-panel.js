@@ -6,7 +6,7 @@
 
 import {
   VERSION, TICKS, boostLabel, clamp, copy, deg, esc, heating, holidayBack, houseLock, isOff, mins, nowPct, num, preheating, problemOf, reasonOf, statusOf, stripHtml, targetLabel, todayBlocks,
-} from "./hearth-common.js?v=1.0.0b10";
+} from "./hearth-common.js?v=1.0.0b11";
 
 const HOUSE = [["home", "Home"], ["away", "Away"], ["holiday", "Holiday"]];
 const MODES = [["auto", "Schedule"], ["heat", "Fixed"], ["off", "Off"]];
@@ -772,20 +772,28 @@ class HearthPanel extends HTMLElement {
         <section class="card stack">
           <div class="row between flexwrap"><h2>Hot water</h2>
             <span class="chip ${h.hot_water_switch ? "ok" : "grey"}">${h.hot_water_switch ? "Heated by Hearth" : "Not heated by Hearth"}</span></div>
-          ${h.hot_water_switch ? `<div class="muted">${esc(this._hotWaterPlan(h))}</div>` : ""}
+          <p class="plan">${esc(this._hotWaterPlan(h))}</p>
           <div>
-            <div class="kv"><span>Heat the hot water with<span class="sub">${h.hot_water_switch ? "Hearth turns this on to heat the tank and off again when a room needs the boiler" : "Choose your thermostat's Call for hot water switch and Hearth will heat the tank whenever the radiators aren't using the boiler"}</span></span>
+            <div class="caps step">What heats it</div>
+            <div class="kv"><span>Call for hot water switch<span class="sub">${h.hot_water_switch ? "Hearth turns this on to heat the tank, and off when the tank is hot or a room needs the boiler" : "Choose the thermostat's Call for hot water switch to let Hearth heat the tank"}</span></span>
               <span class="pick">${this._entityField("hot_water_switch", "switch,input_boolean", "Call for hot water switch", h.hot_water_switch)}</span></div>
             ${h.hot_water_switch ? `
-            <div class="kv"><span>Tank temperature sensor<span class="sub">${h.hot_water_sensor ? "Hearth tops the tank up whenever it cools, at any time of day" : "Optional. With a probe on the tank, Hearth tops it up whenever it cools. Without one, it heats the tank ahead of the times below"}</span></span>
+            <div class="kv"><span>Tank temperature sensor<span class="sub">${h.hot_water_sensor ? "The probe on the tank. Hearth goes by its temperature" : "Optional, but better: with a probe on the tank, Hearth heats it by temperature instead of by the clock"}</span></span>
               <span class="pick">${this._entityField("hot_water_sensor", "sensor", "Tank temperature sensor", h.hot_water_sensor, "temperature")}</span></div>
-            ${h.hot_water_sensor ? `${tempRow("hot_water_reheat_below", "Top up when the tank falls below", "", 30, 60)}
-            ${tempRow("hot_water_target", "Heat it until it reaches", "Set the thermostat on the tank itself a few degrees higher, as a backstop", 40, 65)}
-            <div class="kv"><span class="muted small">The two settings below are only used if the sensor stops reporting.</span></div>` : ""}
-            <div class="kv"><label for="h-hot_water_ready_by">Have a hot tank by<span class="sub">The times you need hot water, such as morning showers and evening baths. Type up to four, like 06:30, 18:00. Hearth heats the tank at some point in the six hours before each one, when no radiators are on. For 06:30 that's usually just after midnight</span></label>
-              <span class="unit"><input id="h-hot_water_ready_by" type="text" inputmode="numeric" value="${esc((h.hot_water_ready_by || []).join(", "))}" data-house-times="hot_water_ready_by"></span></div>
-            ${secRow("hot_water_minutes", "Heat it for up to", "How long the boiler heats the tank before each of those times. An hour heats most tanks from cold. If the water's already hot the tank's own thermostat stops the boiler, so a long time here doesn't waste gas", 15, 180, "min", 1)}
-            <div class="kv"><span>If Hearth stops<span class="sub">The hot water stops within ten minutes. To heat it without Hearth, use the boost on the thermostat, or turn the thermostat's own hot water schedule back on: Hearth never changes it.</span></span></div>` : ""}
+            ${h.hot_water_sensor ? `
+            <div class="caps step">How hot · warmest at the top</div>
+            <div class="ladder">
+              ${tempRow("hot_water_target", "<b>Full</b>: stop heating at", "Hearth stops here. Set the thermostat on the tank itself a few degrees higher, as a backstop", 40, 65).replace('class="kv"', 'class="kv rung full"')}
+              ${tempRow("hot_water_reheat_below", "<b>Top up</b>: start heating below", "Hearth heats the tank back up to full, but only while no room is using the radiators, so the rooms keep their heat", 30, 60).replace('class="kv"', 'class="kv rung top"')}
+              ${tempRow("hot_water_heat_anyway_below", "<b>Too cold to wait</b>: heat at once below", `Hearth stops waiting for the radiators: the boiler heats the rooms and the tank together until the tank is back to ${deg(h.hot_water_reheat_below)}, then the rest waits for a gap`, 25, 55).replace('class="kv"', 'class="kv rung cold"')}
+            </div>
+            <details class="fold" ${this._folds?.hw ? "open" : ""}><summary data-fold="hw">If the tank sensor stops working</summary>
+              <div class="sub">Hearth goes by the clock instead until the sensor reports again (it says so on the Rooms tab). Nothing here is used while the sensor works.</div>
+              ${this._clockRows(h, secRow)}
+            </details>` : `
+            <div class="caps step">When to heat it</div>
+            ${this._clockRows(h, secRow)}`}
+            <div class="kv"><span>If Hearth or Home Assistant stops<span class="sub">The hot water goes off within ten minutes. To heat it without Hearth, use the boost on the thermostat, or turn the thermostat's own hot water schedule back on: Hearth never changes it.</span></span></div>` : ""}
           </div>
         </section>
         <section class="card stack">
@@ -832,17 +840,24 @@ class HearthPanel extends HTMLElement {
   }
 
   // Entity pickers ----------------------------------------------------------------
-  // What the hot water settings add up to, in a sentence.
+  // What the hot water settings add up to, in plain words.
   _hotWaterPlan(h) {
-    const times = h.hot_water_ready_by || [];
-    const list = times.length > 1 ? `${times.slice(0, -1).join(", ")} and ${times[times.length - 1]}` : times[0];
-    const byTime = times.length
-      ? `Hearth heats the tank for up to ${Number(h.hot_water_minutes)} minutes ahead of ${list}`
-      : "No times are set, so Hearth won't heat the tank";
+    if (!h.hot_water_switch) return "Hearth isn't heating the hot water. Choose the thermostat's Call for hot water switch below and it will, fitting it around the radiators.";
     if (h.hot_water_sensor) {
-      return `Hearth heats the tank to ${deg(h.hot_water_target)} whenever it falls below ${deg(h.hot_water_reheat_below)}, but only while no radiator room needs the boiler.`;
+      const floor = Math.min(Number(h.hot_water_heat_anyway_below ?? 40), Number(h.hot_water_reheat_below) - 1);
+      return `Hearth keeps the tank between ${deg(h.hot_water_reheat_below)} and ${deg(h.hot_water_target)}, heating it in the gaps when no room is using the radiators. If it ever falls below ${deg(floor)}, it doesn't wait: the boiler heats the rooms and the tank together. A boost you start yourself always runs.`;
     }
-    return times.length ? `${byTime}, but only while no radiator room needs the boiler. A boost you start yourself always runs.` : `${byTime}.`;
+    const times = h.hot_water_ready_by || [];
+    if (!times.length) return "No times are set, so Hearth won't heat the tank.";
+    const list = times.length > 1 ? `${times.slice(0, -1).join(", ")} and ${times[times.length - 1]}` : times[0];
+    return `Hearth heats the tank for up to ${Number(h.hot_water_minutes)} minutes before ${list}, in a gap when no room is using the radiators. A boost you start yourself always runs.`;
+  }
+
+  // The clock settings: the plan without a tank sensor, the fallback with one.
+  _clockRows(h, secRow) {
+    return `<div class="kv"><label for="h-hot_water_ready_by">Have a hot tank by<span class="sub">The times you need hot water, like morning showers and evening baths. Up to four, like 06:30, 18:00. Hearth heats the tank in a gap in the six hours before each</span></label>
+              <span class="unit"><input id="h-hot_water_ready_by" type="text" inputmode="numeric" value="${esc((h.hot_water_ready_by || []).join(", "))}" data-house-times="hot_water_ready_by"></span></div>
+            ${secRow("hot_water_minutes", "Heat it for up to", "Before each of those times. An hour heats most tanks from cold, and the tank's own thermostat stops the boiler early if it's already hot, so a long time here doesn't waste gas", 15, 180, "min", 1)}`;
   }
 
   _entityField(key, domain, label, value, deviceClass = "") {
@@ -1027,6 +1042,12 @@ class HearthPanel extends HTMLElement {
 
   // Events ----------------------------------------------------------------------------
   _click(e) {
+    const fold = e.target.closest("summary[data-fold]");
+    if (fold) {
+      // The panel redraws on every change: remember what's open.
+      this._folds = { ...this._folds, [fold.dataset.fold]: !fold.parentElement.open };
+      return;
+    }
     const el = e.target.closest("[data-act]");
     if (!el || el.disabled) return;
     const act = el.dataset.act;
@@ -1334,6 +1355,16 @@ input[type=time],input[type=datetime-local]{color-scheme:light dark;font-size:15
 .switch.on{background:var(--primary-color)}
 .switch.on span{left:23px}
 details{font-size:14px}
+.plan{margin:0;line-height:1.5}
+.step{padding:16px 0 4px}
+.ladder .rung{border-left:4px solid var(--hp-line);padding-left:12px}
+.ladder .rung.full{border-left-color:var(--hp-heat)}
+.ladder .rung.top{border-left-color:var(--hp-warn)}
+.ladder .rung.cold{border-left-color:var(--primary-color)}
+.fold{border-top:1px solid var(--hp-line);padding-top:4px}
+.fold>.sub{margin:0 0 4px}
+.fold>summary::before{content:"▸";width:16px;flex:none}
+.fold[open]>summary::before{content:"▾"}
 summary{cursor:pointer;min-height:36px;display:flex;align-items:center;color:var(--secondary-text-color)}
 .flow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:13px;color:var(--secondary-text-color)}
 .node{border:1px solid var(--hp-line);border-radius:10px;padding:8px 12px;color:var(--primary-text-color)}

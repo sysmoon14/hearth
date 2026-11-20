@@ -16,7 +16,10 @@ When the tank wants heat:
 
 When it may have it: while no radiator room is asking for heat. A run doesn't
 start when a room is about to start warming, and a run that's going is
-stopped the moment a room asks. Hot water somebody turned on by hand is left
+stopped the moment a room asks. The one exception: with a tank sensor, a tank
+that's fallen below the "heat anyway" temperature is heated straight away,
+sharing the boiler with the radiators, until it's back to the reheat
+temperature. Hot water somebody turned on by hand is left
 alone.
 """
 
@@ -31,6 +34,7 @@ from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    CONF_HW_FLOOR,
     CONF_HW_MINUTES,
     CONF_HW_READY,
     CONF_HW_REHEAT,
@@ -109,6 +113,9 @@ class TankState:
     # With a sensor: on its way up to the target, rather than waiting to
     # fall below the reheat temperature.
     reheating: bool = False
+    # With a sensor: fell below the "heat anyway" temperature, so heating
+    # whatever the radiators are doing until back to the reheat temperature.
+    urgent: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -116,6 +123,7 @@ class TankState:
             "delivered": round(self.delivered, 1),
             "mine": self.mine,
             "reheating": self.reheating,
+            "urgent": self.urgent,
             "boost_until": self.boost_until.isoformat() if self.boost_until else None,
         }
 
@@ -131,6 +139,7 @@ class TankState:
             state.heating_for, state.delivered = None, 0.0
         state.mine = bool(data.get("mine"))
         state.reheating = bool(data.get("reheating"))
+        state.urgent = bool(data.get("urgent"))
         try:
             state.boost_until = dt_util.parse_datetime(data["boost_until"]) if data.get("boost_until") else None
         except (TypeError, ValueError):
@@ -171,6 +180,10 @@ class HotWater:
     @property
     def reheat_below(self) -> float:
         return min(float(self.hub.settings[CONF_HW_REHEAT]), self.target - 1)
+
+    @property
+    def heat_anyway_below(self) -> float:
+        return min(float(self.hub.settings.get(CONF_HW_FLOOR, 40.0)), self.reheat_below - 1)
 
     @property
     def minutes(self) -> float:
@@ -242,15 +255,21 @@ class HotWater:
     def _wants(self, now: datetime, ready: datetime | None) -> tuple[bool, str]:
         """Whether the tank wants heat, and what to say when it doesn't."""
         temp = self.tank_temp()
-        if temp is not None:
-            st = self.state
+        st = self.state
+        if temp is None:
+            st.urgent = False
+        else:
             if self.hub.house_mode == HOUSE_HOLIDAY and ready is None:
-                st.reheating = False
+                st.reheating = st.urgent = False
                 return False, "Holiday: the hot water is off"
             if temp >= self.target:
                 st.reheating = False
             elif temp < self.reheat_below:
                 st.reheating = True
+            if temp < self.heat_anyway_below:
+                st.urgent = True
+            elif temp >= self.reheat_below:
+                st.urgent = False
             if st.reheating:
                 return True, ""
             return False, f"Hot · {temp:.0f}°"
@@ -293,6 +312,8 @@ class HotWater:
         # the boiler goes from the radiators to the tank without stopping.
         quiet = not asking
         temp = self.tank_temp()
+        # Too cold to wait: the radiators share the boiler with it.
+        urgent = st.urgent and wants
 
         if switch == "on" and not st.mine:
             # Somebody's own: it runs whatever the radiators are doing.
@@ -302,7 +323,7 @@ class HotWater:
             return
 
         if st.mine:
-            if not wants or not quiet:
+            if not wants or not (quiet or urgent):
                 await self._send(False)
                 st.mine = False
                 self.hub.async_save()
@@ -310,12 +331,19 @@ class HotWater:
                     self._rest_until = now + timedelta(minutes=HW_REST_MINUTES)
             else:
                 self.operation = HEATING
-                self.status = self._heating_words(temp, ready)
+                self.status = self._heating_words(temp, ready, quiet)
                 return
 
         if not wants:
             self.operation = OFF if self.hub.house_mode == HOUSE_HOLIDAY and ready is None else IDLE
             self.status = idle_words
+            return
+        if urgent:
+            if await self._send(True):
+                st.mine = True
+                self.hub.async_save()
+            self.operation = HEATING
+            self.status = self._heating_words(temp, ready, quiet)
             return
         if not quiet:
             self.operation = WAITING
@@ -333,10 +361,12 @@ class HotWater:
             st.mine = True
             self.hub.async_save()
         self.operation = HEATING
-        self.status = self._heating_words(temp, ready)
+        self.status = self._heating_words(temp, ready, quiet)
 
-    def _heating_words(self, temp: float | None, ready: datetime | None) -> str:
+    def _heating_words(self, temp: float | None, ready: datetime | None, quiet: bool = True) -> str:
         if temp is not None:
+            if self.state.urgent and not quiet:
+                return f"Too cold to wait: heating to {self.reheat_below:.0f}° alongside the radiators · {temp:.0f}° now"
             return f"Heating to {self.target:.0f}° · {temp:.0f}° now"
         left = max(0.0, self.minutes - self.state.delivered)
         for_words = f" for {_hhmm(ready)}" if ready else ""
@@ -388,6 +418,7 @@ class HotWater:
             "set_by_hearth": self.state.mine,
             "boost_until": self.state.boost_until.isoformat() if self.state.boost_until else None,
             "by": "temperature" if self.tank_temp() is not None else "time",
+            "heat_anyway_below": self.heat_anyway_below if self.sensor else None,
             "tank_sensor": self.sensor,
             "ready_by": list(self.hub.settings.get(CONF_HW_READY) or []),
             "next_ready_by": upcoming.isoformat() if upcoming else None,
