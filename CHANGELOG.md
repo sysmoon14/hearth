@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.0b10
+
+- The hot water is heated with a **Call for hot water switch** (Fledge 0.21's, on a Nest), not by setting the thermostat's hot water boost. Hearth turns the switch on while the tank wants heat and the radiators are quiet, and off when a room asks; Fledge keeps the Nest's hot water going while it's on, on a ten-minute lease, so if Home Assistant stops the hot water stops within ten minutes. Hearth no longer renews boosts, waits for the thermostat to show them, or rounds lengths to the boost's options.
+- **Choose the switch on the House tab after updating.** The hot water boost setting is dropped (with a warning in the log), and the hot water is off until a switch is chosen.
+- `hearth.boost_hot_water` turns the switch on for the minutes given, and Hearth turns it off when they're up, even across a restart. The hot water entity has a new `boost_until` attribute. A boost started on the Nest itself isn't seen by Hearth.
+
 ## 1.0.0b9
 
 - The hot water starts as soon as the last radiator room stops asking for heat, not once Hearth has stopped calling for it. Hearth keeps calling for heat for a minute or so after the last room stops, so the two now overlap by that long and the boiler goes from the radiators to the tank without stopping and starting again. A room that asks again still stops the hot water at once.

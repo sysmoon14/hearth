@@ -6,7 +6,7 @@
 
 import {
   VERSION, TICKS, boostLabel, clamp, copy, deg, esc, heating, holidayBack, houseLock, isOff, mins, nowPct, num, preheating, problemOf, reasonOf, statusOf, stripHtml, targetLabel, todayBlocks,
-} from "./hearth-common.js?v=1.0.0b9";
+} from "./hearth-common.js?v=1.0.0b10";
 
 const HOUSE = [["home", "Home"], ["away", "Away"], ["holiday", "Holiday"]];
 const MODES = [["auto", "Schedule"], ["heat", "Fixed"], ["off", "Off"]];
@@ -98,7 +98,7 @@ class HearthPanel extends HTMLElement {
 
   _watched() {
     const i = this._info;
-    return [i.house_mode, i.demand, i.hot_water, i.settings.boiler_switch, i.settings.hot_water_boost,
+    return [i.house_mode, i.demand, i.hot_water, i.settings.boiler_switch, i.settings.hot_water_switch,
       ...i.rooms.flatMap((r) => [r.entity_id, ...r.trvs, r.stat, r.sensor])].filter(Boolean);
   }
 
@@ -771,12 +771,12 @@ class HearthPanel extends HTMLElement {
         </section>
         <section class="card stack">
           <div class="row between flexwrap"><h2>Hot water</h2>
-            <span class="chip ${h.hot_water_boost ? "ok" : "grey"}">${h.hot_water_boost ? "Heated by Hearth" : "Not heated by Hearth"}</span></div>
-          ${h.hot_water_boost ? `<div class="muted">${esc(this._hotWaterPlan(h))}</div>` : ""}
+            <span class="chip ${h.hot_water_switch ? "ok" : "grey"}">${h.hot_water_switch ? "Heated by Hearth" : "Not heated by Hearth"}</span></div>
+          ${h.hot_water_switch ? `<div class="muted">${esc(this._hotWaterPlan(h))}</div>` : ""}
           <div>
-            <div class="kv"><span>Heat the hot water with<span class="sub">${h.hot_water_boost ? "Hearth turns this on to heat the tank and off again when a room needs the boiler" : "Choose your boiler thermostat's hot water boost and Hearth will heat the tank whenever the radiators aren't using the boiler"}</span></span>
-              <span class="pick">${this._entityField("hot_water_boost", "select,input_select", "Hot water boost", h.hot_water_boost)}</span></div>
-            ${h.hot_water_boost ? `
+            <div class="kv"><span>Heat the hot water with<span class="sub">${h.hot_water_switch ? "Hearth turns this on to heat the tank and off again when a room needs the boiler" : "Choose your thermostat's Call for hot water switch and Hearth will heat the tank whenever the radiators aren't using the boiler"}</span></span>
+              <span class="pick">${this._entityField("hot_water_switch", "switch,input_boolean", "Call for hot water switch", h.hot_water_switch)}</span></div>
+            ${h.hot_water_switch ? `
             <div class="kv"><span>Tank temperature sensor<span class="sub">${h.hot_water_sensor ? "Hearth tops the tank up whenever it cools, at any time of day" : "Optional. With a probe on the tank, Hearth tops it up whenever it cools. Without one, it heats the tank ahead of the times below"}</span></span>
               <span class="pick">${this._entityField("hot_water_sensor", "sensor", "Tank temperature sensor", h.hot_water_sensor, "temperature")}</span></div>
             ${h.hot_water_sensor ? `${tempRow("hot_water_reheat_below", "Top up when the tank falls below", "", 30, 60)}
@@ -785,7 +785,7 @@ class HearthPanel extends HTMLElement {
             <div class="kv"><label for="h-hot_water_ready_by">Have a hot tank by<span class="sub">The times you need hot water, such as morning showers and evening baths. Type up to four, like 06:30, 18:00. Hearth heats the tank at some point in the six hours before each one, when no radiators are on. For 06:30 that's usually just after midnight</span></label>
               <span class="unit"><input id="h-hot_water_ready_by" type="text" inputmode="numeric" value="${esc((h.hot_water_ready_by || []).join(", "))}" data-house-times="hot_water_ready_by"></span></div>
             ${secRow("hot_water_minutes", "Heat it for up to", "How long the boiler heats the tank before each of those times. An hour heats most tanks from cold. If the water's already hot the tank's own thermostat stops the boiler, so a long time here doesn't waste gas", 15, 180, "min", 1)}
-            <div class="kv"><span>If Hearth stops<span class="sub">The hot water stops within half an hour. To heat it without Hearth, use the boost on the thermostat, or turn the thermostat's own hot water schedule back on: Hearth never changes it.</span></span></div>` : ""}
+            <div class="kv"><span>If Hearth stops<span class="sub">The hot water stops within ten minutes. To heat it without Hearth, use the boost on the thermostat, or turn the thermostat's own hot water schedule back on: Hearth never changes it.</span></span></div>` : ""}
           </div>
         </section>
         <section class="card stack">
@@ -901,7 +901,7 @@ class HearthPanel extends HTMLElement {
       this._render();
       return;
     }
-    if (this._house && ["boiler_switch", "hot_water_boost", "hot_water_sensor"].includes(key)) {
+    if (this._house && ["boiler_switch", "hot_water_switch", "hot_water_sensor"].includes(key)) {
       this._house[key] = value || null;
       this._render();
     }

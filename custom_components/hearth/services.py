@@ -117,7 +117,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
         if not entries:
             raise ServiceValidationError("Hearth isn't running")
         if (tank := entries[0].runtime_data.hot_water) is None:
-            raise ServiceValidationError("Hearth isn't heating the hot water: choose its boost on the House tab")
+            raise ServiceValidationError("Hearth isn't heating the hot water: choose its Call for hot water switch on the House tab")
         return tank
 
     async def boost_hot_water(call: ServiceCall) -> None:

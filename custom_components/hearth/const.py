@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 DOMAIN = "hearth"
-VERSION = "1.0.0b9"
+VERSION = "1.0.0b10"
 
 # Zone kinds
 KIND_RADIATOR = "radiator"
@@ -61,13 +61,15 @@ CONF_OFF_DELAY = "demand_off_delay"
 # 0 turns warming up early off.
 CONF_PREHEAT_MAX = "preheat_max_minutes"
 
-# Hot water: Hearth heats the cylinder by setting a boost on the boiler's
-# thermostat (a select with "off" and lengths in minutes) while no radiator
-# room wants the boiler. Without a tank sensor it gives the cylinder so many
+# Hot water: Hearth heats the cylinder by turning on a Call for hot water
+# switch (Fledge's, which keeps the Nest's hot water on while it's on) while
+# no radiator room wants the boiler. Without a tank sensor it gives the cylinder so many
 # minutes of gas ahead of each "ready by" time and leaves the cylinder's own
 # thermostat to stop the boiler; with one it heats from the reheat
 # temperature up to the target.
-CONF_HW_BOOST = "hot_water_boost"
+CONF_HW_SWITCH = "hot_water_switch"
+# Before 1.0.0b10 Hearth set the thermostat's hot water boost (a select).
+OLD_HW_BOOST = "hot_water_boost"
 CONF_HW_SENSOR = "hot_water_sensor"
 CONF_HW_READY = "hot_water_ready_by"
 CONF_HW_MINUTES = "hot_water_minutes"
@@ -133,7 +135,7 @@ SEED_DAYS = 10
 SETTINGS = (
     CONF_BOILER_SWITCH, CONF_BOOST_TEMP, CONF_BOOST_MINUTES, CONF_BOOST_MINUTES_UFH, CONF_AWAY_TEMP, CONF_HOLIDAY_TEMP,
     CONF_OFF_TEMP, CONF_ON_DELAY, CONF_OFF_DELAY, CONF_PREHEAT_MAX, CONF_ZONES,
-    CONF_HW_BOOST, CONF_HW_SENSOR, CONF_HW_READY, CONF_HW_MINUTES, CONF_HW_TARGET, CONF_HW_REHEAT,
+    CONF_HW_SWITCH, CONF_HW_SENSOR, CONF_HW_READY, CONF_HW_MINUTES, CONF_HW_TARGET, CONF_HW_REHEAT,
 )
 
 # How long before a "ready by" time the hot water may start, so it can find a
@@ -142,9 +144,6 @@ HW_WINDOW_HOURS = 6
 # The hot water doesn't start when a radiator room is due to start warming
 # within this long: the run would be cut off almost at once.
 HW_CLEAR_MINUTES = 20
-# The boost Hearth sets, renewed while the tank still wants heat. Short, so
-# the hot water stops by itself soon after Hearth does.
-HW_BOOST_OPTION = "30"
 # After the radiators cut a run short, how long they must stay quiet before
 # the hot water starts again.
 HW_REST_MINUTES = 5
