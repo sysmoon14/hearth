@@ -97,7 +97,12 @@ Hearth can heat the hot water cylinder too, in the gaps the radiators leave, so 
 When the tank wants heat depends on whether it has a sensor:
 
 - **No tank sensor.** Give the times you want hot water ready by (06:30 and 18:00 to start with). From six hours before each, the tank is owed so many minutes of gas and takes them whenever the radiators are quiet. The cylinder's own thermostat stops the boiler when the tank is hot.
-- **A tank sensor.** A temperature probe on the cylinder. The tank is heated whenever it falls below one temperature, up to another, at any time of day. Keep the cylinder's own thermostat a few degrees above Hearth's target, as the backstop. If the sensor stops reporting, Hearth goes back to minutes of gas.
+- **A tank sensor.** A temperature probe on the cylinder. Hearth goes by three temperatures, at any time of day:
+  - **Full** (55° to start with): Hearth stops heating here. Keep the cylinder's own thermostat a few degrees higher, as the backstop.
+  - **Top up** (45°): below this, the tank is heated back to full, in the gaps the radiators leave.
+  - **Too cold to wait** (40°): below this, the hot water doesn't wait. The boiler heats the rooms and the tank together until the tank is back to the top-up line; the rest waits for a gap. This stops a long cold spell, with the radiators on all evening, from leaving nobody a hot shower.
+
+  If the sensor stops reporting, Hearth goes back to the clock (the times and minutes above) until it reports again. Those settings sit in a folded "If the tank sensor stops working" section on the House tab.
 
 Hot water turned on by hand (the switch, or `hearth.boost_hot_water`) runs whatever the radiators are doing; a boost on the Nest itself isn't seen by Hearth. On Holiday the hot water is off, and is heated before the holiday ends if it has an end. Fledge's switch holds the hot water on for ten minutes at a time, so if Home Assistant stops, the hot water stops within ten minutes; the thermostat's own hot water schedule is never touched, so it can be turned back on by hand.
 
