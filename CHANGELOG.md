@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.0b12
+
+**A hot water card**
+- A new dashboard card, `custom:hearth-hot-water-card`, loads with the Hearth card. It shows the tank's temperature on a bar marked with its three lines (too cold to wait, top up, full), what the hot water is doing and why, and Boost / Keep off / Turn off / Let Hearth decide buttons. Without a tank sensor it shows the minutes heated towards the next "ready by" time instead. `boost_minutes` sets the Boost button's length (an hour to start with).
+- The hot water entity has new `full_at` and `top_up_below` attributes.
+
+**The hot water by hand**
+- **Turned on by hand** (the Call for hot water switch, or the Boost button), the tank heats whatever the radiators are doing until it's full, then Hearth carries on. It used to run until somebody turned it off. Without a tank sensor it runs for the "heat it for up to" minutes; a boost runs for its own minutes, stopping sooner once the tank is full.
+- **Turned off by hand** (the switch, or the Turn off / Keep off buttons), it stays off until it's handed back, even below "too cold to wait". Hearth used to turn it straight back on if the tank wanted heat. It's handed back with the new **Let Hearth decide** button on the Rooms tab (`hearth.resume_hot_water`), or by turning it on by hand. After a day off, it's raised as a repair in case it was forgotten.
+- The hot water card says which it is ("On by hand · heating to 55°, 48° now", "Off by hand since 14:05"), and the entity has new `on_by_hand` and `off_by_hand_since` attributes. The House tab has a "By hand" note saying all this.
+
 ## 1.0.0b11
 
 - **Too cold to wait.** With a tank sensor, a third temperature (40° to start with): if the tank falls below it, the hot water no longer waits for the radiators. The boiler heats the rooms and the tank together until the tank is back to the top-up temperature, then the rest waits for a gap as before. The tank says "Too cold to wait: heating to 50° alongside the radiators" while it does, and has a new `heat_anyway_below` attribute.

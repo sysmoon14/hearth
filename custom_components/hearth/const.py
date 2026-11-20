@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 DOMAIN = "hearth"
-VERSION = "1.0.0b11"
+VERSION = "1.0.0b12"
 
 # Zone kinds
 KIND_RADIATOR = "radiator"
@@ -152,6 +152,9 @@ HW_CLEAR_MINUTES = 20
 # After the radiators cut a run short, how long they must stay quiet before
 # the hot water starts again.
 HW_REST_MINUTES = 5
+# Hot water turned off by hand stays off; after this long it's raised as a
+# problem, in case it was forgotten.
+HW_HELD_WARN_HOURS = 24
 # A tank sensor that hasn't reported for this long isn't trusted: Hearth
 # goes back to minutes of gas until it reports again.
 HW_SENSOR_STALE_MINUTES = 45
@@ -177,6 +180,7 @@ SERVICE_SET_HOLIDAY = "set_holiday"
 SERVICE_ADD_WARM_UP = "add_warm_up"
 SERVICE_BOOST_HOT_WATER = "boost_hot_water"
 SERVICE_STOP_HOT_WATER = "stop_hot_water"
+SERVICE_RESUME_HOT_WATER = "resume_hot_water"
 
 # A problem that lasts this long is raised as a repair in Home Assistant, so
 # it's seen without opening Hearth. Shorter ones are restarts and blips.

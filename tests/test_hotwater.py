@@ -163,18 +163,19 @@ async def test_a_boost_runs_for_its_minutes_whatever_the_radiators(hass: HomeAss
     assert hass.states.get(HW).state == "on"
     tank = hass.states.get(TANK)
     assert tank.state == "heating"
-    assert tank.attributes["status"] == "Boosted by hand until 08:45: sharing the boiler with the radiators"
+    assert tank.attributes["status"] == "On by hand until 08:45 · sharing the boiler with the radiators"
     assert tank.attributes["set_by_hearth"] is False
     assert tank.attributes["boost_until"] is not None
 
-    # Its time is up: Hearth turns it off.
+    # Its time is up: Hearth turns it off and carries on (not a hold).
     await _pass(hass, freezer, seconds=60, times=45)
     assert hass.states.get(HW).state == "off"
-    assert entry.runtime_data.hot_water.state.boost_until is None
+    st = entry.runtime_data.hot_water.state
+    assert st.boost_until is None and not st.by_hand and st.held_since is None
     assert hass.states.get(TANK).state == "idle"
 
 
-async def test_the_switch_turned_on_by_hand_is_left_alone_until_stopped(hass: HomeAssistant, house, calls, freezer) -> None:
+async def test_on_by_hand_without_a_sensor_runs_for_the_minutes(hass: HomeAssistant, house, calls, freezer) -> None:
     _at(freezer, "2026-11-16T08:00:00+00:00")
     hass.states.async_set(OFFICE_SENSOR, "15.0")  # the office is asking for heat
     await _setup(hass, calls)
@@ -182,11 +183,86 @@ async def test_the_switch_turned_on_by_hand_is_left_alone_until_stopped(hass: Ho
     await hass.async_block_till_done()
     await _pass(hass, freezer, times=3)
     assert hass.states.get(HW).state == "on"
-    assert hass.states.get(TANK).attributes["status"] == "Boosted by hand: sharing the boiler with the radiators"
+    assert hass.states.get(TANK).attributes["status"] == "On by hand until 09:00 · sharing the boiler with the radiators"
+    await _pass(hass, freezer, seconds=60, times=60)
+    assert hass.states.get(HW).state == "off"
+    assert hass.states.get(TANK).attributes["off_by_hand_since"] is None
 
+
+async def test_on_by_hand_heats_to_full_then_hearth_carries_on(hass: HomeAssistant, house, calls, freezer) -> None:
+    _at(freezer, "2026-11-16T08:00:00+00:00")
+    hass.states.async_set(OFFICE_SENSOR, "15.0")  # the office is asking for heat
+    hass.states.async_set(PROBE, "52.0", {"device_class": "temperature"})
+    entry = await _setup(hass, calls, hot_water_sensor=PROBE, hot_water_reheat_below=50)
+    assert hass.states.get(HW).state == "off"  # hot enough: nothing to do
+
+    hass.states.async_set(HW, "on")
+    await hass.async_block_till_done()
+    await _pass(hass, freezer, times=3)
+    assert hass.states.get(HW).state == "on"
+    tank = hass.states.get(TANK)
+    assert tank.attributes["status"] == "On by hand · heating to 55°, 52° now · sharing the boiler with the radiators"
+    assert tank.attributes["on_by_hand"] is True
+
+    # Full: it turns off, and that isn't taken as somebody turning it off.
+    hass.states.async_set(PROBE, "55.0", {"device_class": "temperature"})
+    await hass.async_block_till_done()
+    await _pass(hass, freezer, times=2)
+    assert hass.states.get(HW).state == "off"
+    st = entry.runtime_data.hot_water.state
+    assert not st.by_hand and st.held_since is None
+    assert hass.states.get(TANK).attributes["status"] == "Hot · 55°"
+
+
+async def test_off_by_hand_stays_off_until_handed_back(hass: HomeAssistant, house, calls, freezer) -> None:
+    _at(freezer, "2026-11-16T01:00:00+00:00")
+    hass.states.async_set(PROBE, "38.0", {"device_class": "temperature"})
+    entry = await _setup(hass, calls, hot_water_sensor=PROBE)
+    assert hass.states.get(HW).state == "on"  # Hearth is heating it
+
+    hass.states.async_set(HW, "off")  # somebody turns it off
+    await hass.async_block_till_done()
+    await _pass(hass, freezer, times=10)
+    assert hass.states.get(HW).state == "off"  # even below "too cold to wait"
+    tank = hass.states.get(TANK)
+    assert tank.state == "off"
+    assert tank.attributes["status"] == "Off by hand since 01:00"
+    assert tank.attributes["problem"] is None
+
+    # A day on, it's a problem worth seeing.
+    await _pass(hass, freezer, seconds=3600, times=24)
+    assert hass.states.get(HW).state == "off"
+    assert hass.states.get(TANK).attributes["problem"] == (
+        "The hot water has been off by hand since Mon 01:00: hand it back to Hearth to heat the tank again")
+
+    await hass.services.async_call("hearth", "resume_hot_water", {}, blocking=True)
+    await hass.async_block_till_done()
+    await _pass(hass, freezer)
+    assert hass.states.get(HW).state == "on"
+    assert entry.runtime_data.hot_water.state.held_since is None
+
+
+async def test_stop_keeps_it_off_and_turning_it_on_hands_back(hass: HomeAssistant, house, calls, freezer) -> None:
+    _at(freezer, "2026-11-16T01:00:00+00:00")
+    hass.states.async_set(PROBE, "43.0", {"device_class": "temperature"})
+    entry = await _setup(hass, calls, hot_water_sensor=PROBE)
+    assert hass.states.get(HW).state == "on"
     await hass.services.async_call("hearth", "stop_hot_water", {}, blocking=True)
     await hass.async_block_till_done()
+    await _pass(hass, freezer, times=5)
     assert hass.states.get(HW).state == "off"
+
+    # On by hand: it heats to full, then Hearth is back in charge.
+    hass.states.async_set(HW, "on")
+    await hass.async_block_till_done()
+    await _pass(hass, freezer)
+    st = entry.runtime_data.hot_water.state
+    assert st.by_hand and st.held_since is None
+    hass.states.async_set(PROBE, "56.0", {"device_class": "temperature"})
+    await hass.async_block_till_done()
+    await _pass(hass, freezer, times=2)
+    assert hass.states.get(HW).state == "off"
+    assert not st.by_hand and st.held_since is None
 
 
 async def test_off_when_the_switch_is_unavailable(hass: HomeAssistant, house, calls, freezer) -> None:

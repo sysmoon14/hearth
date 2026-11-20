@@ -11,7 +11,9 @@
 
 import {
   VERSION, TICKS, STRIP_STYLE, boostLabel, clamp, deg, esc, heating, holidayBack, houseLock, isOff, nowPct, problemOf, reasonOf, statusOf, stripHtml, targetLabel, todayBlocks,
-} from "./hearth-common.js?v=1.0.0b11";
+} from "./hearth-common.js?v=1.0.0b12";
+// The hot water card comes with this one, so dashboards need nothing more.
+import "./hearth-hot-water-card.js?v=1.0.0b12";
 
 const MODES = [["auto", "Schedule"], ["heat", "Fixed"], ["off", "Off"]];
 const HOUSE = [["home", "Home"], ["away", "Away"], ["holiday", "Holiday"]];

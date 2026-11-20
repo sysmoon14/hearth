@@ -90,3 +90,4 @@ boost_hot_water:
           max: 240
           unit_of_measurement: min
 stop_hot_water:
+resume_hot_water:

@@ -2,7 +2,7 @@
 // edits the same way wherever it's shown: the words for what a room is doing,
 // the colours for temperatures, a day's blocks, and the schedule editor.
 
-export const VERSION = "1.0.0b11";
+export const VERSION = "1.0.0b12";
 export const MAX_CHANGES = 6;
 export const DAYS = [["weekdays", "Weekdays · Mon–Fri"], ["weekends", "Weekends · Sat–Sun"]];
 
@@ -345,3 +345,14 @@ class HearthScheduleEditor extends HTMLElement {
 }
 
 if (!customElements.get("hearth-schedule-editor")) customElements.define("hearth-schedule-editor", HearthScheduleEditor);
+
+// What the hot water is up to, in a line under its status: by hand, or how
+// Hearth heats it.
+export function hotWaterNote(a) {
+  if (a?.off_by_hand_since) return "Turned off by hand: Hearth leaves it off until you hand it back";
+  if (a?.on_by_hand) return a.by === "temperature"
+    ? "Turned on by hand: it stops when the tank is full, then Hearth carries on"
+    : "Turned on by hand: it stops after its time, then Hearth carries on";
+  const how = a?.by === "temperature" ? "Heated by the tank's temperature" : `Ready by ${(a?.ready_by || []).join(" and ") || "no times set"}`;
+  return `${how}, when the radiators are quiet`;
+}
