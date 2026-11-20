@@ -2,6 +2,7 @@
   "entity": {
     "select": { "house_mode": { "default": "mdi:home-thermometer", "state": { "away": "mdi:home-export-outline", "holiday": "mdi:airplane" } } },
     "binary_sensor": { "radiator_demand": { "default": "mdi:radiator-off", "state": { "on": "mdi:radiator" } } },
+    "sensor": { "heated_today": { "default": "mdi:fire-circle" }, "heated_week": { "default": "mdi:calendar-week" }, "cost_today": { "default": "mdi:cash" } },
     "water_heater": { "hot_water": { "default": "mdi:water-boiler", "state": { "off": "mdi:water-boiler-off", "waiting": "mdi:water-boiler-auto" } } }
   },
   "services": { "set_schedule": { "service": "mdi:calendar-clock" }, "boost": { "service": "mdi:fire" }, "cancel_boost": { "service": "mdi:fire-off" }, "boost_hot_water": { "service": "mdi:water-boiler" }, "stop_hot_water": { "service": "mdi:water-boiler-off" } }

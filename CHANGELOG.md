@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.0b13
+
+**How long each room heated, and what it cost**
+- Every room has two new sensors: **Heated today** and **Heated this week**, in minutes. A radiator room counts while it's asking for heat; an underfloor room while its stat says it's heating. They're kept across restarts.
+- Give Hearth the boiler's average output (kW) and a gas price on the House tab, under the new **What heating costs** card, and every room also gets a **Heating cost today** sensor. The price can be typed in (pence a kWh) or read from a sensor, such as your supplier's unit rate in pounds a kWh; the typed price is used whenever the sensor has no reading.
+- When rooms heat at the same time they share the boiler's time, so two rooms heating together for an hour are each charged half an hour of gas. It's an estimate: a boiler modulates, and the hot water uses the same gas.
+- The card and the Hearth panel say it in one quiet line when a room is opened: "Heated 2 h 10 min today · about 45p". The collapsed rooms don't change.
+- The room entity has new `heated_today`, `heated_week`, `cost_today` and `cost_week` attributes (not recorded: the sensors are).
+
 ## 1.0.0b12
 
 **A hot water card**

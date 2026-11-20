@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 DOMAIN = "hearth"
-VERSION = "1.0.0b12"
+VERSION = "1.0.0b13"
 
 # Zone kinds
 KIND_RADIATOR = "radiator"
@@ -60,6 +60,14 @@ CONF_OFF_DELAY = "demand_off_delay"
 # How early a radiator room may start warming for a warmer schedule change.
 # 0 turns warming up early off.
 CONF_PREHEAT_MAX = "preheat_max_minutes"
+
+# What heating costs: the boiler's average output while it heats, and the
+# gas price, typed in (pence a kWh) or read from a sensor (an energy
+# supplier's unit rate). Without the output, rooms show only how long they
+# heated.
+CONF_BOILER_KW = "boiler_kw"
+CONF_GAS_PRICE = "gas_price"
+CONF_GAS_PRICE_ENTITY = "gas_price_entity"
 
 # Hot water: Hearth heats the cylinder by turning on a Call for hot water
 # switch (Fledge's, which keeps the Nest's hot water on while it's on) while
@@ -140,6 +148,7 @@ SEED_DAYS = 10
 SETTINGS = (
     CONF_BOILER_SWITCH, CONF_BOOST_TEMP, CONF_BOOST_MINUTES, CONF_BOOST_MINUTES_UFH, CONF_AWAY_TEMP, CONF_HOLIDAY_TEMP,
     CONF_OFF_TEMP, CONF_ON_DELAY, CONF_OFF_DELAY, CONF_PREHEAT_MAX, CONF_ZONES,
+    CONF_BOILER_KW, CONF_GAS_PRICE, CONF_GAS_PRICE_ENTITY,
     CONF_HW_SWITCH, CONF_HW_SENSOR, CONF_HW_READY, CONF_HW_MINUTES, CONF_HW_TARGET, CONF_HW_REHEAT, CONF_HW_FLOOR,
 )
 

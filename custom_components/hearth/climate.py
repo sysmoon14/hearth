@@ -58,6 +58,8 @@ class _HearthClimate(HearthEntity, ClimateEntity):
     _unrecorded_attributes = frozenset({
         "schedule", "devices", "room_sensor", "room_sensor_stale", "problem", "zone_id", "kind", "profile",
         "warm_up_rate", "warm_ups", "warm_ups_from_history", "preheat_from", "minutes_to_target",
+        # The sensors record these; on the room they're for the card.
+        "heated_today", "heated_week", "cost_today", "cost_week",
     })
     _attr_min_temp = MIN_TEMP
     _attr_max_temp = MAX_TEMP

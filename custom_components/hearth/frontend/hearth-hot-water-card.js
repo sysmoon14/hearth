@@ -8,7 +8,7 @@
  *   entity: water_heater.x    # optional: found by itself
  */
 
-import { VERSION, deg, esc, hotWaterNote } from "./hearth-common.js?v=1.0.0b12";
+import { VERSION, deg, esc, hotWaterNote } from "./hearth-common.js?v=1.0.0b13";
 
 const STYLE = `
   :host { display: block; }

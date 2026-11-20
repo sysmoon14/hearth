@@ -5,8 +5,8 @@
 // Hearth's own actions and entities, the same ones the cards use.
 
 import {
-  VERSION, TICKS, boostLabel, clamp, copy, deg, esc, heating, holidayBack, hotWaterNote, houseLock, isOff, mins, nowPct, num, preheating, problemOf, reasonOf, statusOf, stripHtml, targetLabel, todayBlocks,
-} from "./hearth-common.js?v=1.0.0b12";
+  VERSION, TICKS, boostLabel, clamp, copy, deg, esc, heatedOf, heating, holidayBack, hotWaterNote, houseLock, isOff, mins, nowPct, num, preheating, problemOf, reasonOf, statusOf, stripHtml, targetLabel, todayBlocks,
+} from "./hearth-common.js?v=1.0.0b13";
 
 const HOUSE = [["home", "Home"], ["away", "Away"], ["holiday", "Holiday"]];
 const MODES = [["auto", "Schedule"], ["heat", "Fixed"], ["off", "Off"]];
@@ -347,6 +347,7 @@ class HearthPanel extends HTMLElement {
             ${problemOf(st) ? `<span class="warntext">${esc(problemOf(st))}</span>` : ""}
             <span class="why ${heating ? "hot" : ""}" style="font-size:17px">${esc(statusOf(st))}</span>
             ${reasonOf(st) ? `<span class="muted">${esc(reasonOf(st))}</span>` : ""}
+            ${heatedOf(st, this._hass.config?.currency) ? `<span class="muted small">${esc(heatedOf(st, this._hass.config?.currency))}</span>` : ""}
           </div>
           <div class="controls">
             <div class="row" style="gap:18px">
@@ -755,6 +756,8 @@ class HearthPanel extends HTMLElement {
       <span class="unit"><input id="h-${key}" type="number" min="${lo}" max="${hi}" step="0.5" value="${esc(h[key])}" data-house="${key}">°</span></div>`;
     const secRow = (key, label, sub, lo, hi, unit, scale) => `<div class="kv"><label for="h-${key}">${label}${sub ? `<span class="sub">${sub}</span>` : ""}</label>
       <span class="unit"><input id="h-${key}" type="number" min="${lo / scale}" max="${hi / scale}" step="1" value="${esc(Math.round(Number(h[key]) / scale))}" data-house="${key}" data-scale="${scale}">${unit}</span></div>`;
+    const optRow = (key, label, sub, lo, hi, step, unit) => `<div class="kv"><label for="h-${key}">${label}${sub ? `<span class="sub">${sub}</span>` : ""}</label>
+      <span class="unit"><input id="h-${key}" type="number" min="${lo}" max="${hi}" step="${step}" value="${h[key] == null ? "" : esc(h[key])}" placeholder="–" data-house="${key}" data-optional="1">${unit}</span></div>`;
     return `<div class="wrap split">
       <div class="main stack">
         <section class="card stack">
@@ -824,6 +827,14 @@ class HearthPanel extends HTMLElement {
           ${secRow("boost_minutes_underfloor", "Boost an underfloor room for", "A floor takes longer to answer", 30, 480, "min", 1)}
           ${tempRow("off_temp", "A radiator room that's off", "Kept above · an underfloor room that's off keeps its thermostat's own frost setting", 5, 15)}
           ${secRow("preheat_max_minutes", "Warm up early by up to", "Radiator rooms start early to reach a warmer change on time · 0 turns it off", 0, 360, "min", 1)}
+        </section>
+        <section class="card">
+          <h2>What heating costs</h2>
+          <span class="muted small">Optional. With both, each room shows roughly what its heating cost today, as well as how long it heated.</span>
+          ${optRow("boiler_kw", "Boiler output", "What it burns while it heats, on average · somewhere between its minimum and its rating, often 10–15 kW in a house", 1, 60, 0.5, "kW")}
+          <div class="kv"><span>Gas price sensor<span class="sub">Your supplier's unit rate, if you have one in Home Assistant. Used whenever it has a reading</span></span>
+            <span class="pick">${this._entityField("gas_price_entity", "sensor,input_number", "Gas price sensor", h.gas_price_entity)}</span></div>
+          ${optRow("gas_price", "Gas price", h.gas_price_entity ? "If the sensor has no reading" : "Pence a kWh, from your bill", 0, 100, 0.01, "p/kWh")}
         </section>
         <section class="card stack tight">
           <button class="btn solid wide" data-act="house-save" ${dirty && !this._busy ? "" : "disabled"}>${this._busy ? "Saving…" : "Save house settings"}</button>
@@ -920,7 +931,7 @@ class HearthPanel extends HTMLElement {
       this._render();
       return;
     }
-    if (this._house && ["boiler_switch", "hot_water_switch", "hot_water_sensor"].includes(key)) {
+    if (this._house && ["boiler_switch", "hot_water_switch", "hot_water_sensor", "gas_price_entity"].includes(key)) {
       this._house[key] = value || null;
       this._render();
     }
@@ -1118,7 +1129,8 @@ class HearthPanel extends HTMLElement {
     }
     if (t.dataset.house) {
       const key = t.dataset.house;
-      this._house[key] = Number(t.value) * Number(t.dataset.scale || 1);
+      // An optional setting left empty is cleared, not saved as 0.
+      this._house[key] = t.dataset.optional && t.value.trim() === "" ? null : Number(t.value) * Number(t.dataset.scale || 1);
       this._render();
       return;
     }

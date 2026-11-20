@@ -19,6 +19,7 @@ sees it.
 | **The physical control** | Turning a valve by hand counts the same as − or + on the card. |
 | **What it's doing** | Every room says it the same way: "Heating to 21° · about 35 min", "Warming up early · 21° by 07:00", "Up to temperature", "Not heating" or "Off". It learns how fast each room warms to say how long it has to go. |
 | **Why** | And why it's aiming there: "19° until 17:00, then 16°", "Away: held at 16°", "21° until 10:30, then 16°" after a tap on + or −. |
+| **How much it heated** | "Heated 2 h 10 min today · about 45p" when a room is opened, and as sensors: Heated today, Heated this week and, once Hearth knows the boiler's output and the gas price, Heating cost today. |
 
 The house has one more control, **Home / Away / Holiday**:
 

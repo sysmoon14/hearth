@@ -2,7 +2,7 @@
 // edits the same way wherever it's shown: the words for what a room is doing,
 // the colours for temperatures, a day's blocks, and the schedule editor.
 
-export const VERSION = "1.0.0b12";
+export const VERSION = "1.0.0b13";
 export const MAX_CHANGES = 6;
 export const DAYS = [["weekdays", "Weekdays · Mon–Fri"], ["weekends", "Weekends · Sat–Sun"]];
 
@@ -97,6 +97,23 @@ export function targetLabel(stateObj) {
   if (a.preheating && a.next_change_at) return `by ${clock(a.next_change_at)}`;
   if (a.override_until) return `until ${clock(a.override_until)}`;
   return a.next_change_at ? `until ${clock(a.next_change_at)}` : "on schedule";
+}
+// How long the room has heated today, and roughly what it cost, in one
+// quiet line: "Heated 2 h 10 min today · about 45p". "" when there's
+// nothing to count yet.
+export function heatedOf(stateObj, currency = "GBP") {
+  const a = stateObj?.attributes || {};
+  const today = Number(a.heated_today);
+  if (!Number.isFinite(today) || a.heated_today == null) return "";
+  if (today < 1) return "Not heated today";
+  const h = Math.floor(today / 60), m = Math.round(today % 60);
+  const time = h ? (m ? `${h} h ${m} min` : `${h} h`) : `${m} min`;
+  const cost = Number(a.cost_today);
+  if (a.cost_today == null || !Number.isFinite(cost)) return `Heated ${time} today`;
+  const money = currency === "GBP" && cost < 1
+    ? `${Math.max(1, Math.round(cost * 100))}p`
+    : new Intl.NumberFormat(undefined, { style: "currency", currency }).format(cost);
+  return `Heated ${time} today · about ${money}`;
 }
 // Something wrong with the room's devices, in Hearth's words, or "".
 export const problemOf = (stateObj) => stateObj?.attributes?.problem || "";

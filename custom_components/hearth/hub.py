@@ -27,7 +27,10 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    CONF_BOILER_KW,
     CONF_BOILER_SWITCH,
+    CONF_GAS_PRICE,
+    CONF_GAS_PRICE_ENTITY,
     CONF_HW_SWITCH,
     CONF_OFF_DELAY,
     CONF_ON_DELAY,
@@ -48,7 +51,7 @@ from .const import (
     STORAGE_MINOR_VERSION,
     STORAGE_VERSION,
 )
-from . import preheat
+from . import preheat, usage
 from .hotwater import HotWater, TankState
 from .zone import RadiatorZone, UnderfloorZone, Zone, ZoneState, make_zone
 
@@ -104,10 +107,59 @@ class Hearth:
         self.last_boiler_command: str | None = None
         self._seeding: asyncio.Task | None = None
         self.seed_status = "not needed"
+        # When the rooms' heating was last added up, and last saved.
+        self._counted_at: datetime | None = None
+        self._counts_saved = monotonic.monotonic()
 
     @property
     def boiler_switch(self) -> str | None:
         return self.settings.get(CONF_BOILER_SWITCH) or None
+
+    def boiler_kw(self) -> float | None:
+        """What the boiler burns while it heats, in kW, if it's been given."""
+        try:
+            kw = float(self.settings.get(CONF_BOILER_KW) or 0)
+        except (TypeError, ValueError):
+            return None
+        return kw if kw > 0 else None
+
+    def gas_price(self) -> float | None:
+        """Pence a kWh: from the price sensor when there is one and it has a
+        reading, otherwise the price typed in."""
+        if entity := self.settings.get(CONF_GAS_PRICE_ENTITY):
+            state = self.hass.states.get(entity)
+            if state is not None and (
+                price := usage.pence(state.state, state.attributes.get("unit_of_measurement"))
+            ) is not None:
+                return price
+        typed = self.settings.get(CONF_GAS_PRICE)
+        return usage.pence(typed, "p/kWh") if typed not in (None, "") else None
+
+    def settings_price_given(self) -> bool:
+        """A gas price has been set, as a number or a sensor."""
+        return bool(self.settings.get(CONF_GAS_PRICE_ENTITY)) or self.settings.get(CONF_GAS_PRICE) not in (None, "")
+
+    @callback
+    def count_heating(self, now: datetime) -> None:
+        """Add the time since the last look to every room that was heating
+        then, sharing it out between the rooms heating together."""
+        since, self._counted_at = self._counted_at, now
+        if since is None:
+            return
+        seconds = (now - since).total_seconds()
+        if seconds <= 0 or seconds > usage.MAX_STEP_SECONDS:
+            return
+        heating = [z for z in self.zones.values() if z.calling]
+        if not heating:
+            return
+        minutes = seconds / 60
+        day = dt_util.as_local(since).date()
+        for zone in heating:
+            zone.state.heated = usage.add(zone.state.heated, day, minutes, minutes / len(heating))
+        # Not every look: the totals are worth a write every few minutes.
+        if monotonic.monotonic() - self._counts_saved >= 300:
+            self._counts_saved = monotonic.monotonic()
+            self.async_save()
 
     @property
     def radiator_zones(self) -> list[RadiatorZone]:
@@ -165,6 +217,9 @@ class Hearth:
         has gone. When Home Assistant stops, that's straight away; when Hearth
         only unloads (to reload, say), a little later, unless it's back by then."""
         self.stopped = True
+        # The heating counted since the last write isn't lost.
+        self.count_heating(dt_util.utcnow())
+        self.async_save()
         for unsub in self._unsubs:
             unsub()
         self._unsubs.clear()
@@ -363,6 +418,9 @@ class Hearth:
             if self.stopped:
                 return
             now = dt_util.utcnow()
+            # Before the rooms decide again: the time since the last look
+            # goes to the rooms that were heating through it.
+            self.count_heating(now)
             # One room going wrong mustn't stop the others, or the boiler
             # being turned off when nothing wants it.
             for zone in self.zones.values():
