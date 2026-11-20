@@ -28,7 +28,7 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     CONF_BOILER_SWITCH,
-    CONF_HW_BOOST,
+    CONF_HW_SWITCH,
     CONF_OFF_DELAY,
     CONF_ON_DELAY,
     CONF_ZONE_ID,
@@ -142,7 +142,7 @@ class Hearth:
             except Exception:  # noqa: BLE001 - one room mustn't stop the rest
                 _LOGGER.exception("%s couldn't start cleanly", zone.name)
 
-        if self.settings.get(CONF_HW_BOOST):
+        if self.settings.get(CONF_HW_SWITCH):
             self.hot_water = HotWater(self, TankState.from_dict(stored.get("hot_water")))
         watched = {e for z in self.zones.values() for e in z.watched_entities()}
         if self.hot_water:
@@ -497,7 +497,7 @@ class Hearth:
             "settings": {k: v for k, v in self.settings.items() if k != CONF_ZONES},
             "hot_water": {
                 "state": self.hot_water.state.as_dict(), "operation": self.hot_water.operation,
-                "boost": self.hot_water.boost_state(), **self.hot_water.attributes(now),
+                "switch": self.hot_water.switch_state(), **self.hot_water.attributes(now),
             } if self.hot_water else None,
             "zones": {
                 zid: {

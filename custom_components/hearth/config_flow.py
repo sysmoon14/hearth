@@ -18,7 +18,7 @@ SWITCH = selector.EntitySelector(selector.EntitySelectorConfig(domain=["switch",
 class HearthConfigFlow(ConfigFlow, domain=DOMAIN):
     VERSION = 1
     # 2: the call for heat is only ever a switch; old thermostat settings dropped.
-    MINOR_VERSION = 2
+    MINOR_VERSION = 3
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         if user_input is not None:

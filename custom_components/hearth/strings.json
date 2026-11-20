@@ -144,11 +144,11 @@
     },
     "boost_hot_water": {
       "name": "Boost the hot water",
-      "description": "Heat the hot water now, whatever the radiators are doing. It ends by itself.",
+      "description": "Heat the hot water now, whatever the radiators are doing, for so many minutes.",
       "fields": {
         "minutes": {
           "name": "Minutes",
-          "description": "How long, rounded up to a length the boiler's thermostat offers."
+          "description": "How long it runs before Hearth turns it off."
         }
       }
     },

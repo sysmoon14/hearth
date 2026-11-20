@@ -111,8 +111,15 @@ async def calls(hass: HomeAssistant) -> Calls:
     calls.register("number", "set_value", _set_value)
     calls.register("select", "select_option", lambda d: _select_option(hass, d))
     calls.register("homeassistant", "update_entity")
-    calls.register("switch", "turn_on", lambda d: hass.states.async_set(RELAY, "on"))
-    calls.register("switch", "turn_off", lambda d: hass.states.async_set(RELAY, "off"))
+    def _switch(state):
+        def apply(d):
+            ids = d.get("entity_id") or [RELAY]
+            for entity_id in ids if isinstance(ids, list) else [ids]:
+                hass.states.async_set(entity_id, state)
+        return apply
+
+    calls.register("switch", "turn_on", _switch("on"))
+    calls.register("switch", "turn_off", _switch("off"))
     for service in ("create_profile_two", "hold_on", "hold_off", "set_away_mode"):
         calls.register("heatmiserneo", service)
     return calls
@@ -165,7 +172,7 @@ async def house(hass: HomeAssistant) -> None:
 def hearth_entry(hass: HomeAssistant, zones: list[dict], **options: Any) -> MockConfigEntry:
     entry = MockConfigEntry(
         domain="hearth", title="Hearth", data={},
-        minor_version=2,
+        minor_version=3,
         options={"boiler_switch": RELAY, "demand_on_delay": 0, "demand_off_delay": 0, "zones": zones, **options},
     )
     entry.add_to_hass(hass)

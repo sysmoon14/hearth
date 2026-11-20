@@ -16,7 +16,7 @@ async def test_setup_asks_for_the_switch(hass: HomeAssistant, house, calls) -> N
     entry = result["result"]
     await hass.async_block_till_done()
     assert entry.options == {"boiler_switch": RELAY, "zones": []}
-    assert entry.minor_version == 2
+    assert entry.minor_version == 3
 
 
 async def test_configure_points_to_the_panel(hass: HomeAssistant, house, calls) -> None:
@@ -41,6 +41,6 @@ async def test_an_older_entry_drops_the_thermostat_settings(hass: HomeAssistant,
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    assert entry.minor_version == 2
+    assert entry.minor_version == 3
     assert entry.options == {"boiler_switch": RELAY, "away_temp": 15.5, "zones": [OFFICE]}
     assert hass.states.get("climate.office") is not None

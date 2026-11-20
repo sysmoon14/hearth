@@ -13,7 +13,7 @@ from homeassistant.core import Event, HomeAssistant
 from homeassistant.helpers import config_validation as cv, device_registry as dr
 from homeassistant.helpers.typing import ConfigType
 
-from .const import CARD_FILE, CONF_BOILER_SWITCH, CONF_ZONES, DOMAIN, FRONTEND_URL, SETTINGS, VERSION
+from .const import CARD_FILE, CONF_BOILER_SWITCH, CONF_ZONES, DOMAIN, FRONTEND_URL, OLD_HW_BOOST, SETTINGS, VERSION
 from . import panel
 from .hub import Hearth
 from .services import async_setup_services
@@ -41,7 +41,8 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """1.2: Hearth only calls for heat with a switch. The boiler thermostat
-    and the temperatures it was set to go, with anything else left over."""
+    and the temperatures it was set to go, with anything else left over.
+    1.3: the hot water is a Call for hot water switch, not a boost select."""
     if entry.version > 1:
         return False
     if entry.minor_version < 2:
@@ -56,6 +57,15 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 entry.options["boiler"],
             )
         hass.config_entries.async_update_entry(entry, options=options, minor_version=2)
+    if entry.minor_version < 3:
+        options = dict(entry.options)
+        if boost := options.pop(OLD_HW_BOOST, None):
+            _LOGGER.warning(
+                "Hearth now heats the hot water with a Call for hot water switch; %s is no longer used. "
+                "Choose the switch on the Hearth panel's House tab",
+                boost,
+            )
+        hass.config_entries.async_update_entry(entry, options=options, minor_version=3)
     return True
 
 

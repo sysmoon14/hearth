@@ -28,7 +28,7 @@ from .const import (
     CONF_BOOST_MINUTES_UFH,
     CONF_BOOST_TEMP,
     CONF_HOLIDAY_TEMP,
-    CONF_HW_BOOST,
+    CONF_HW_SWITCH,
     CONF_HW_MINUTES,
     CONF_HW_READY,
     CONF_HW_REHEAT,
@@ -65,7 +65,7 @@ TEMPS = {
 }
 SECONDS = {CONF_ON_DELAY: (0, 900), CONF_OFF_DELAY: (0, 1800), CONF_BOOST_MINUTES: (15, 240),
            CONF_BOOST_MINUTES_UFH: (30, 480), CONF_PREHEAT_MAX: (0, 360), CONF_HW_MINUTES: (15, 180)}
-OPTIONAL_ENTITIES = (CONF_BOILER_SWITCH, CONF_HW_BOOST, CONF_HW_SENSOR)
+OPTIONAL_ENTITIES = (CONF_BOILER_SWITCH, CONF_HW_SWITCH, CONF_HW_SENSOR)
 READY_TIME = vol.Match(r"^([01]\d|2[0-3]):[0-5]\d$")
 SWITCH_DOMAINS = ("switch", "input_boolean")
 
@@ -261,7 +261,7 @@ def ws_remove_room(hass: HomeAssistant, connection: websocket_api.ActiveConnecti
 
 HOUSE = {
     vol.Optional(CONF_BOILER_SWITCH): vol.Any(None, vol.All(cv.entity_id, cv.entity_domain(SWITCH_DOMAINS))),
-    vol.Optional(CONF_HW_BOOST): vol.Any(None, vol.All(cv.entity_id, cv.entity_domain(("select", "input_select")))),
+    vol.Optional(CONF_HW_SWITCH): vol.Any(None, vol.All(cv.entity_id, cv.entity_domain(SWITCH_DOMAINS))),
     vol.Optional(CONF_HW_SENSOR): vol.Any(None, vol.All(cv.entity_id, cv.entity_domain("sensor"))),
     vol.Optional(CONF_HW_READY): vol.All([READY_TIME], vol.Length(max=4)),
     **{vol.Optional(k): vol.All(vol.Coerce(float), vol.Range(min=lo, max=hi)) for k, (lo, hi) in TEMPS.items()},

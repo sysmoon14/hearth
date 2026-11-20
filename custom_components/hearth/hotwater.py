@@ -1,8 +1,9 @@
 """Hot water: heat the cylinder while the radiators don't want the boiler.
 
-Hearth heats the tank one way: it sets a boost on the boiler's thermostat (a
-select whose options are "off" and lengths in minutes). A boost ends by
-itself, so if Hearth or Home Assistant stops, the hot water stops soon after.
+Hearth heats the tank one way: it turns on a Call for hot water switch (Fledge's,
+on a Nest). Fledge keeps the thermostat's hot water on while the switch is on,
+on a short lease, so if Hearth or Home Assistant stops, the hot water stops
+soon after.
 
 When the tank wants heat:
 
@@ -15,7 +16,8 @@ When the tank wants heat:
 
 When it may have it: while no radiator room is asking for heat. A run doesn't
 start when a room is about to start warming, and a run that's going is
-stopped the moment a room asks. A boost somebody set by hand is left alone.
+stopped the moment a room asks. Hot water somebody turned on by hand is left
+alone.
 """
 
 from __future__ import annotations
@@ -23,21 +25,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 import logging
-import time as monotonic
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.util import dt as dt_util
 
 from .const import (
-    CONF_HW_BOOST,
     CONF_HW_MINUTES,
     CONF_HW_READY,
     CONF_HW_REHEAT,
     CONF_HW_SENSOR,
+    CONF_HW_SWITCH,
     CONF_HW_TARGET,
     HOUSE_HOLIDAY,
-    HW_BOOST_OPTION,
     HW_CLEAR_MINUTES,
     HW_REST_MINUTES,
     HW_SENSOR_STALE_MINUTES,
@@ -53,9 +53,6 @@ BAD_STATES = (STATE_UNAVAILABLE, STATE_UNKNOWN, None, "")
 # The longest gap between two looks that still counts as time heating: more
 # than this and Hearth wasn't watching (a restart), so it doesn't guess.
 MAX_STEP_SECONDS = 120
-# How long the thermostat is given to show a boost Hearth has just set or
-# stopped, before what it shows is taken as somebody else's doing.
-SETTLE_SECONDS = 90
 
 HEATING = "heating"
 WAITING = "waiting"
@@ -105,8 +102,10 @@ class TankState:
     # The "ready by" moment being heated for, and the minutes it's had.
     heating_for: datetime | None = None
     delivered: float = 0.0
-    # The boost that's running is one Hearth set, not somebody's own.
+    # The switch is on because Hearth turned it on, not somebody by hand.
     mine: bool = False
+    # A boost asked for with hearth.boost_hot_water runs until then.
+    boost_until: datetime | None = None
     # With a sensor: on its way up to the target, rather than waiting to
     # fall below the reheat temperature.
     reheating: bool = False
@@ -117,6 +116,7 @@ class TankState:
             "delivered": round(self.delivered, 1),
             "mine": self.mine,
             "reheating": self.reheating,
+            "boost_until": self.boost_until.isoformat() if self.boost_until else None,
         }
 
     @classmethod
@@ -131,6 +131,10 @@ class TankState:
             state.heating_for, state.delivered = None, 0.0
         state.mine = bool(data.get("mine"))
         state.reheating = bool(data.get("reheating"))
+        try:
+            state.boost_until = dt_util.parse_datetime(data["boost_until"]) if data.get("boost_until") else None
+        except (TypeError, ValueError):
+            state.boost_until = None
         return state
 
 
@@ -148,14 +152,13 @@ class HotWater:
         self.operation = IDLE
         self.status = "Starting"
         self._last_look: datetime | None = None
-        self._sent: tuple[str, float] | None = None
         self._rest_until: datetime | None = None
         self._stale_logged = False
 
     # --- settings --------------------------------------------------------
     @property
-    def boost(self) -> str:
-        return self.hub.settings[CONF_HW_BOOST]
+    def switch(self) -> str:
+        return self.hub.settings[CONF_HW_SWITCH]
 
     @property
     def sensor(self) -> str | None:
@@ -174,17 +177,16 @@ class HotWater:
         return float(self.hub.settings[CONF_HW_MINUTES])
 
     def watched_entities(self) -> list[str]:
-        return [e for e in (self.boost, self.sensor) if e]
+        return [e for e in (self.switch, self.sensor) if e]
 
     # --- reading ---------------------------------------------------------
-    def boost_state(self) -> str | None:
-        """What the boost is set to: "off", a length in minutes, or None when
-        the thermostat can't be reached."""
-        state = self.hass.states.get(self.boost)
+    def switch_state(self) -> str | None:
+        """"on", "off", or None when the switch can't be reached."""
+        state = self.hass.states.get(self.switch)
         return None if state is None or state.state in BAD_STATES else state.state
 
     def on(self) -> bool:
-        return self.boost_state() not in (None, "off")
+        return self.switch_state() == "on"
 
     def tank_temp(self) -> float | None:
         """The tank's temperature, if it has a sensor that's still reporting."""
@@ -205,8 +207,8 @@ class HotWater:
         return None if stale else temp
 
     def problem(self) -> str | None:
-        if self.boost_state() is None:
-            return "Can't heat the hot water: the boiler's hot water boost is unavailable"
+        if self.switch_state() is None:
+            return "Can't heat the hot water: the Call for hot water switch is unavailable"
         if self.sensor and self.tank_temp() is None:
             return "The tank sensor isn't reporting: heating the hot water by time"
         return None
@@ -225,7 +227,7 @@ class HotWater:
 
     def _count(self, now: datetime, ready: datetime | None) -> None:
         """Keep the minutes of gas the tank has had towards this "ready by"
-        time, whoever set the boost."""
+        time, whoever turned it on."""
         st = self.state
         if ready != st.heating_for:
             st.heating_for, st.delivered = ready, 0.0
@@ -265,23 +267,22 @@ class HotWater:
         return True, ""
 
     async def async_update(self, now: datetime) -> None:
-        """Look at the tank and the radiators, and set or stop the boost."""
+        """Look at the tank and the radiators, and turn the hot water on or off."""
         st = self.state
-        boost = self.boost_state()
-        if boost is None:
-            self.operation, self.status = OFF, "The boiler's hot water boost is unavailable"
+        switch = self.switch_state()
+        if switch is None:
+            self.operation, self.status = OFF, "The Call for hot water switch is unavailable"
             self._last_look = None
             return
-        # The thermostat takes a moment to show what it was last sent.
-        settling = self._sent is not None and monotonic.monotonic() - self._sent[1] < SETTLE_SECONDS
-        if settling and (boost == "off") != (self._sent[0] == "off"):
-            self.operation = HEATING if self._sent[0] != "off" else WAITING
-            self.status = "Starting" if self._sent[0] != "off" else "Stopping"
-            return
-        if st.mine and boost != HW_BOOST_OPTION:
-            # The boost Hearth set has run out or been stopped, or somebody
-            # has set a different one, which is theirs now.
-            st.mine = False
+        if switch == "off" and (st.mine or st.boost_until):
+            # Turned off by somebody else: Hearth decides afresh.
+            st.mine, st.boost_until = False, None
+            self.hub.async_save()
+        if st.boost_until is not None and now >= st.boost_until:
+            # A boost asked for by hand has had its time.
+            st.boost_until = None
+            await self._send(False)
+            switch = "off"
             self.hub.async_save()
         ready = self._ready_by(now)
         self._count(now, ready)
@@ -293,15 +294,16 @@ class HotWater:
         quiet = not asking
         temp = self.tank_temp()
 
-        if boost != "off" and not st.mine:
-            # Somebody's own boost: it runs whatever the radiators are doing.
+        if switch == "on" and not st.mine:
+            # Somebody's own: it runs whatever the radiators are doing.
             self.operation = HEATING
-            self.status = "Boosted by hand" + (": sharing the boiler with the radiators" if not quiet else "")
+            until = f" until {_hhmm(st.boost_until)}" if st.boost_until else ""
+            self.status = f"Boosted by hand{until}" + (": sharing the boiler with the radiators" if not quiet else "")
             return
 
         if st.mine:
             if not wants or not quiet:
-                await self._send("off")
+                await self._send(False)
                 st.mine = False
                 self.hub.async_save()
                 if wants:
@@ -327,7 +329,7 @@ class HotWater:
         if self._rest_until is not None and now < self._rest_until:
             self.operation, self.status = WAITING, "Waiting for the radiators to settle"
             return
-        if await self._send(HW_BOOST_OPTION):
+        if await self._send(True):
             st.mine = True
             self.hub.async_save()
         self.operation = HEATING
@@ -340,47 +342,41 @@ class HotWater:
         for_words = f" for {_hhmm(ready)}" if ready else ""
         return f"Heating{for_words} · {round(left)} min to go"
 
-    async def _send(self, option: str) -> bool:
-        """Set the boost, once: the thermostat takes a moment to show it."""
-        clock = monotonic.monotonic()
-        if self._sent and self._sent[0] == option and clock - self._sent[1] < 60:
-            return False
-        self._sent = (option, clock)
+    async def _send(self, on: bool) -> bool:
+        """Turn the switch on or off. Fledge keeps the thermostat's hot water
+        going while it's on."""
         try:
             await self.hass.services.async_call(
-                "select", "select_option", {"entity_id": self.boost, "option": option},
+                self.switch.split(".")[0], "turn_on" if on else "turn_off", {"entity_id": self.switch},
                 blocking=True, context=self.hub.context,
             )
         except Exception as err:  # noqa: BLE001
-            _LOGGER.warning("Couldn't set %s to %s: %s", self.boost, option, err)
+            _LOGGER.warning("Couldn't turn %s %s: %s", self.switch, "on" if on else "off", err)
             return False
         return True
 
     # --- by hand ---------------------------------------------------------
     async def async_boost(self, minutes: int) -> None:
-        """A boost somebody asked for: it runs whatever the radiators want."""
-        state = self.hass.states.get(self.boost)
-        lengths = sorted(int(o) for o in (state.attributes.get("options") or []) if str(o).isdigit()) if state else []
-        option = str(next((n for n in lengths if n >= minutes), lengths[-1] if lengths else minutes))
-        self._sent = None
+        """A boost somebody asked for: it runs for so many minutes, whatever
+        the radiators want."""
         self.state.mine = False
-        if await self._send(option):
-            self.hub.async_save()
+        self.state.boost_until = dt_util.utcnow() + timedelta(minutes=minutes)
+        await self._send(True)
+        self.hub.async_save()
 
     async def async_stop(self) -> None:
         """Stop the hot water, whoever started it."""
-        self._sent = None
-        self.state.mine = False
+        self.state.mine, self.state.boost_until = False, None
         if self.on():
-            await self._send("off")
+            await self._send(False)
         self.hub.async_save()
 
     async def async_shutdown(self) -> None:
-        """Home Assistant is stopping: a boost Hearth set is stopped rather
-        than left to run out with nobody watching the radiators."""
+        """Home Assistant is stopping: hot water Hearth turned on is turned
+        off rather than left with nobody watching the radiators. A boost
+        asked for by hand runs on, and is ended on time after the restart."""
         if self.state.mine and self.on():
-            self._sent = None
-            await self._send("off")
+            await self._send(False)
             self.state.mine = False
 
     def attributes(self, now: datetime) -> dict[str, Any]:
@@ -390,6 +386,7 @@ class HotWater:
             "status": self.status,
             "heating": self.on(),
             "set_by_hearth": self.state.mine,
+            "boost_until": self.state.boost_until.isoformat() if self.state.boost_until else None,
             "by": "temperature" if self.tank_temp() is not None else "time",
             "tank_sensor": self.sensor,
             "ready_by": list(self.hub.settings.get(CONF_HW_READY) or []),

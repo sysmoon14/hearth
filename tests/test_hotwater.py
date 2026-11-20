@@ -13,7 +13,7 @@ from custom_components.hearth import hotwater
 
 from .conftest import OFFICE, OFFICE_SENSOR, OFFICE_TRV, RELAY, hearth_entry
 
-BOOST = "select.boiler_hot_water_boost"
+HW = "switch.boiler_call_for_hot_water"
 TANK = "water_heater.hearth_hot_water"
 PROBE = "sensor.cylinder_temperature"
 LONDON = ZoneInfo("Europe/London")
@@ -52,9 +52,8 @@ def test_a_run_doesnt_start_just_before_a_warm_up() -> None:
 async def _setup(hass, calls, **options):
     from homeassistant.setup import async_setup_component
 
-    hass.states.async_set(BOOST, "off", {"options": ["off", "30", "60", "120"]})
-    calls.extra.add(BOOST)
-    entry = hearth_entry(hass, [OFFICE], hot_water_boost=BOOST, **options)
+    hass.states.async_set(HW, "off")
+    entry = hearth_entry(hass, [OFFICE], hot_water_switch=HW, **options)
     assert await async_setup_component(hass, "climate", {})
     assert await async_setup_component(hass, "select", {})
     calls.patch_climate()
@@ -79,7 +78,7 @@ async def test_heats_when_the_radiators_are_quiet_and_stops_when_one_asks(hass: 
     await _setup(hass, calls)
     # The office is on 16° overnight and reads 18°: nothing asks for heat.
     assert hass.states.get(RELAY).state == "off"
-    assert hass.states.get(BOOST).state == "30"
+    assert hass.states.get(HW).state == "on"
     tank = hass.states.get(TANK)
     assert tank.state == "heating"
     assert tank.attributes["status"].startswith("Heating for 06:30")
@@ -90,7 +89,7 @@ async def test_heats_when_the_radiators_are_quiet_and_stops_when_one_asks(hass: 
     await hass.async_block_till_done()
     await _pass(hass, freezer)
     assert hass.states.get(RELAY).state == "on"
-    assert hass.states.get(BOOST).state == "off"
+    assert hass.states.get(HW).state == "off"
     tank = hass.states.get(TANK)
     assert tank.state == "waiting"
     assert tank.attributes["status"] == "Waiting for the radiators: Office is heating"
@@ -100,9 +99,9 @@ async def test_heats_when_the_radiators_are_quiet_and_stops_when_one_asks(hass: 
     await hass.async_block_till_done()
     await _pass(hass, freezer)
     assert hass.states.get(RELAY).state == "off"
-    assert hass.states.get(BOOST).state == "off"  # resting
+    assert hass.states.get(HW).state == "off"  # resting
     await _pass(hass, freezer, times=10)
-    assert hass.states.get(BOOST).state == "30"
+    assert hass.states.get(HW).state == "on"
 
 
 async def test_starts_while_the_boiler_is_still_held_on_for_the_radiators(hass: HomeAssistant, house, calls, freezer) -> None:
@@ -110,7 +109,7 @@ async def test_starts_while_the_boiler_is_still_held_on_for_the_radiators(hass: 
     hass.states.async_set(OFFICE_SENSOR, "15.0")  # the office is asking for heat
     await _setup(hass, calls, demand_off_delay=180)
     assert hass.states.get(RELAY).state == "on"
-    assert hass.states.get(BOOST).state == "off"
+    assert hass.states.get(HW).state == "off"
 
     # The office is warm: Hearth holds the call for heat for three minutes,
     # and the hot water starts under it, so the boiler never stops.
@@ -118,58 +117,108 @@ async def test_starts_while_the_boiler_is_still_held_on_for_the_radiators(hass: 
     await hass.async_block_till_done()
     await _pass(hass, freezer)
     assert hass.states.get(RELAY).state == "on"
-    assert hass.states.get(BOOST).state == "30"
+    assert hass.states.get(HW).state == "on"
     assert hass.states.get(TANK).state == "heating"
 
     # The hold ends and the hot water carries on.
     await _pass(hass, freezer, times=6)
     assert hass.states.get(RELAY).state == "off"
-    assert hass.states.get(BOOST).state == "30"
+    assert hass.states.get(HW).state == "on"
 
 
 async def test_stops_once_the_tank_has_had_its_minutes(hass: HomeAssistant, house, calls, freezer) -> None:
     _at(freezer, "2026-11-16T01:00:00+00:00")
     entry = await _setup(hass, calls, hot_water_minutes=15)
-    assert hass.states.get(BOOST).state == "30"
+    assert hass.states.get(HW).state == "on"
     await _pass(hass, freezer, seconds=30, times=32)
-    assert hass.states.get(BOOST).state == "off"
+    assert hass.states.get(HW).state == "off"
     tank = hass.states.get(TANK)
     assert tank.state == "idle"
     assert tank.attributes["status"] == "Heated for 06:30"
     assert 15 <= entry.runtime_data.hot_water.state.delivered < 16.5
     # And it isn't started again for the same time.
     await _pass(hass, freezer, times=5)
-    assert hass.states.get(BOOST).state == "off"
+    assert hass.states.get(HW).state == "off"
 
 
 async def test_outside_the_window_it_waits_for_the_next_time(hass: HomeAssistant, house, calls, freezer) -> None:
     _at(freezer, "2026-11-16T08:00:00+00:00")
     hass.states.async_set(OFFICE_SENSOR, "20.0")
     await _setup(hass, calls)
-    assert hass.states.get(BOOST).state == "off"
+    assert hass.states.get(HW).state == "off"
     tank = hass.states.get(TANK)
     assert tank.state == "idle"
     assert tank.attributes["status"] == "Next heats from 12:00, for 18:00"
 
 
-async def test_a_boost_set_by_hand_is_left_alone(hass: HomeAssistant, house, calls, freezer) -> None:
+async def test_a_boost_runs_for_its_minutes_whatever_the_radiators(hass: HomeAssistant, house, calls, freezer) -> None:
     _at(freezer, "2026-11-16T08:00:00+00:00")
     hass.states.async_set(OFFICE_SENSOR, "15.0")  # the office is asking for heat
-    await _setup(hass, calls)
+    entry = await _setup(hass, calls)
     assert hass.states.get(RELAY).state == "on"
     await hass.services.async_call("hearth", "boost_hot_water", {"minutes": 45}, blocking=True)
     await hass.async_block_till_done()
-    assert hass.states.get(BOOST).state == "60"  # rounded up to a length the thermostat has
+    assert hass.states.get(HW).state == "on"
     await _pass(hass, freezer, times=3)
-    assert hass.states.get(BOOST).state == "60"
+    assert hass.states.get(HW).state == "on"
     tank = hass.states.get(TANK)
     assert tank.state == "heating"
-    assert tank.attributes["status"] == "Boosted by hand: sharing the boiler with the radiators"
+    assert tank.attributes["status"] == "Boosted by hand until 08:45: sharing the boiler with the radiators"
     assert tank.attributes["set_by_hearth"] is False
+    assert tank.attributes["boost_until"] is not None
+
+    # Its time is up: Hearth turns it off.
+    await _pass(hass, freezer, seconds=60, times=45)
+    assert hass.states.get(HW).state == "off"
+    assert entry.runtime_data.hot_water.state.boost_until is None
+    assert hass.states.get(TANK).state == "idle"
+
+
+async def test_the_switch_turned_on_by_hand_is_left_alone_until_stopped(hass: HomeAssistant, house, calls, freezer) -> None:
+    _at(freezer, "2026-11-16T08:00:00+00:00")
+    hass.states.async_set(OFFICE_SENSOR, "15.0")  # the office is asking for heat
+    await _setup(hass, calls)
+    hass.states.async_set(HW, "on")
+    await hass.async_block_till_done()
+    await _pass(hass, freezer, times=3)
+    assert hass.states.get(HW).state == "on"
+    assert hass.states.get(TANK).attributes["status"] == "Boosted by hand: sharing the boiler with the radiators"
 
     await hass.services.async_call("hearth", "stop_hot_water", {}, blocking=True)
     await hass.async_block_till_done()
-    assert hass.states.get(BOOST).state == "off"
+    assert hass.states.get(HW).state == "off"
+
+
+async def test_off_when_the_switch_is_unavailable(hass: HomeAssistant, house, calls, freezer) -> None:
+    _at(freezer, "2026-11-16T01:00:00+00:00")
+    hass.states.async_set(HW, "unavailable")
+    entry = hearth_entry(hass, [OFFICE], hot_water_switch=HW)
+    from homeassistant.setup import async_setup_component
+
+    assert await async_setup_component(hass, "climate", {})
+    assert await async_setup_component(hass, "select", {})
+    calls.patch_climate()
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    tank = hass.states.get(TANK)
+    assert tank.state == "off"
+    assert tank.attributes["problem"] == "Can't heat the hot water: the Call for hot water switch is unavailable"
+    assert not calls.of("switch", "turn_on") or all(c["entity_id"] != HW for c in calls.of("switch", "turn_on"))
+
+
+async def test_the_old_boost_setting_is_dropped(hass: HomeAssistant, house, calls) -> None:
+    from homeassistant.setup import async_setup_component
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    entry = MockConfigEntry(domain="hearth", title="Hearth", data={}, minor_version=2,
+                            options={"boiler_switch": RELAY, "zones": [], "hot_water_boost": "select.nest_hot_water_boost"})
+    entry.add_to_hass(hass)
+    assert await async_setup_component(hass, "climate", {})
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.minor_version == 3
+    assert "hot_water_boost" not in entry.options
+    assert entry.runtime_data.hot_water is None
 
 
 async def test_doesnt_start_when_a_room_is_about_to_warm_up(hass: HomeAssistant, house, calls, freezer) -> None:
@@ -178,7 +227,7 @@ async def test_doesnt_start_when_a_room_is_about_to_warm_up(hass: HomeAssistant,
     hass.states.async_set(OFFICE_SENSOR, "16.0")
     await _setup(hass, calls)
     assert hass.states.get(RELAY).state == "off"
-    assert hass.states.get(BOOST).state == "off"
+    assert hass.states.get(HW).state == "off"
     tank = hass.states.get(TANK)
     assert tank.state == "waiting"
     assert tank.attributes["status"] == "Waiting: a room starts warming up at 17:00"
@@ -189,7 +238,7 @@ async def test_with_a_tank_sensor_it_heats_by_temperature(hass: HomeAssistant, h
     hass.states.async_set(OFFICE_SENSOR, "20.0")
     hass.states.async_set(PROBE, "41.0", {"device_class": "temperature"})
     await _setup(hass, calls, hot_water_sensor=PROBE)
-    assert hass.states.get(BOOST).state == "30"
+    assert hass.states.get(HW).state == "on"
     tank = hass.states.get(TANK)
     assert tank.state == "heating"
     assert tank.attributes["current_temperature"] == 41.0
@@ -199,22 +248,22 @@ async def test_with_a_tank_sensor_it_heats_by_temperature(hass: HomeAssistant, h
     hass.states.async_set(PROBE, "50.0", {"device_class": "temperature"})
     await hass.async_block_till_done()
     await _pass(hass, freezer)
-    assert hass.states.get(BOOST).state == "30"
+    assert hass.states.get(HW).state == "on"
 
     hass.states.async_set(PROBE, "55.5", {"device_class": "temperature"})
     await hass.async_block_till_done()
     await _pass(hass, freezer)
-    assert hass.states.get(BOOST).state == "off"
+    assert hass.states.get(HW).state == "off"
     assert hass.states.get(TANK).attributes["status"] == "Hot · 56°"
 
     # Between the two on the way down: it waits for the lower one.
     hass.states.async_set(PROBE, "48.0", {"device_class": "temperature"})
     await hass.async_block_till_done()
     await _pass(hass, freezer, times=12)
-    assert hass.states.get(BOOST).state == "off"
+    assert hass.states.get(HW).state == "off"
 
 
-async def test_no_tank_entity_without_a_boost(hass: HomeAssistant, house, calls, freezer) -> None:
+async def test_no_tank_entity_without_a_switch(hass: HomeAssistant, house, calls, freezer) -> None:
     from homeassistant.setup import async_setup_component
 
     _at(freezer, "2026-11-16T01:00:00+00:00")
