@@ -19,7 +19,15 @@ start when a room is about to start warming, and a run that's going is
 stopped the moment a room asks. The one exception: with a tank sensor, a tank
 that's fallen below the "heat anyway" temperature is heated straight away,
 sharing the boiler with the radiators, until it's back to the reheat
-temperature. Hot water somebody turned on by hand is left
+temperature.
+
+By hand: the switch turned on by somebody else (or hearth.boost_hot_water)
+runs whatever the radiators are doing, until the tank is full (or, with no
+tank sensor, for the "heat it for up to" minutes, or a boost's own minutes),
+and then Hearth carries on. The switch turned off by somebody else (or
+hearth.stop_hot_water) stays off: Hearth doesn't heat the tank again until
+it's handed back (hearth.resume_hot_water, or the switch turned on by hand),
+and says so after a day. Hot water somebody turned on by hand is left
 alone.
 """
 
@@ -43,6 +51,7 @@ from .const import (
     CONF_HW_TARGET,
     HOUSE_HOLIDAY,
     HW_CLEAR_MINUTES,
+    HW_HELD_WARN_HOURS,
     HW_REST_MINUTES,
     HW_SENSOR_STALE_MINUTES,
     HW_WINDOW_HOURS,
@@ -108,8 +117,12 @@ class TankState:
     delivered: float = 0.0
     # The switch is on because Hearth turned it on, not somebody by hand.
     mine: bool = False
-    # A boost asked for with hearth.boost_hot_water runs until then.
+    # On by hand (the switch, or hearth.boost_hot_water): runs until the tank
+    # is full, or until boost_until if that comes first.
+    by_hand: bool = False
     boost_until: datetime | None = None
+    # Off by hand since then: Hearth leaves the tank alone until handed back.
+    held_since: datetime | None = None
     # With a sensor: on its way up to the target, rather than waiting to
     # fall below the reheat temperature.
     reheating: bool = False
@@ -124,7 +137,9 @@ class TankState:
             "mine": self.mine,
             "reheating": self.reheating,
             "urgent": self.urgent,
+            "by_hand": self.by_hand,
             "boost_until": self.boost_until.isoformat() if self.boost_until else None,
+            "held_since": self.held_since.isoformat() if self.held_since else None,
         }
 
     @classmethod
@@ -140,15 +155,24 @@ class TankState:
         state.mine = bool(data.get("mine"))
         state.reheating = bool(data.get("reheating"))
         state.urgent = bool(data.get("urgent"))
-        try:
-            state.boost_until = dt_util.parse_datetime(data["boost_until"]) if data.get("boost_until") else None
-        except (TypeError, ValueError):
-            state.boost_until = None
+        for key in ("boost_until", "held_since"):
+            try:
+                setattr(state, key, dt_util.parse_datetime(data[key]) if data.get(key) else None)
+            except (TypeError, ValueError):
+                setattr(state, key, None)
+        # Before 1.0.0b12 a boost was only its end time.
+        state.by_hand = bool(data.get("by_hand", state.boost_until is not None))
         return state
 
 
 def _hhmm(moment: datetime) -> str:
     return dt_util.as_local(moment).strftime("%H:%M")
+
+
+def _since(moment: datetime, now: datetime) -> str:
+    """14:05 today, or Thu 14:05 before that."""
+    local = dt_util.as_local(moment)
+    return local.strftime("%H:%M" if local.date() == dt_util.as_local(now).date() else "%a %H:%M")
 
 
 class HotWater:
@@ -222,6 +246,10 @@ class HotWater:
     def problem(self) -> str | None:
         if self.switch_state() is None:
             return "Can't heat the hot water: the Call for hot water switch is unavailable"
+        held = self.state.held_since
+        now = dt_util.utcnow()
+        if held is not None and now - held >= timedelta(hours=HW_HELD_WARN_HOURS):
+            return f"The hot water has been off by hand since {_since(held, now)}: hand it back to Hearth to heat the tank again"
         if self.sensor and self.tank_temp() is None:
             return "The tank sensor isn't reporting: heating the hot water by time"
         return None
@@ -293,15 +321,15 @@ class HotWater:
             self.operation, self.status = OFF, "The Call for hot water switch is unavailable"
             self._last_look = None
             return
-        if switch == "off" and (st.mine or st.boost_until):
-            # Turned off by somebody else: Hearth decides afresh.
-            st.mine, st.boost_until = False, None
+        if switch == "off" and (st.mine or st.by_hand):
+            # Turned off by somebody else: it stays off until handed back.
+            st.mine = st.by_hand = False
+            st.boost_until, st.held_since = None, now
+            _LOGGER.info("The hot water was turned off by hand: Hearth leaves it off until it's handed back")
             self.hub.async_save()
-        if st.boost_until is not None and now >= st.boost_until:
-            # A boost asked for by hand has had its time.
-            st.boost_until = None
-            await self._send(False)
-            switch = "off"
+        elif switch == "on" and not st.mine and not st.by_hand:
+            # Turned on by somebody else: it heats the tank to full.
+            st.by_hand, st.held_since = True, None
             self.hub.async_save()
         ready = self._ready_by(now)
         self._count(now, ready)
@@ -315,11 +343,24 @@ class HotWater:
         # Too cold to wait: the radiators share the boiler with it.
         urgent = st.urgent and wants
 
-        if switch == "on" and not st.mine:
-            # Somebody's own: it runs whatever the radiators are doing.
-            self.operation = HEATING
-            until = f" until {_hhmm(st.boost_until)}" if st.boost_until else ""
-            self.status = f"Boosted by hand{until}" + (": sharing the boiler with the radiators" if not quiet else "")
+        if st.by_hand:
+            if temp is None and st.boost_until is None:
+                # No tank sensor (or it's stopped): it runs for a time instead.
+                st.boost_until = now + timedelta(minutes=self.minutes)
+                self.hub.async_save()
+            full = temp is not None and temp >= self.target
+            if not full and (st.boost_until is None or now < st.boost_until):
+                self.operation = HEATING
+                self.status = self._by_hand_words(temp, quiet)
+                return
+            # Full, or its time is up: Hearth carries on from here.
+            st.by_hand, st.boost_until = False, None
+            await self._send(False)
+            self.hub.async_save()
+
+        if st.held_since is not None:
+            self.operation = OFF
+            self.status = f"Off by hand since {_since(st.held_since, now)}"
             return
 
         if st.mine:
@@ -363,6 +404,14 @@ class HotWater:
         self.operation = HEATING
         self.status = self._heating_words(temp, ready, quiet)
 
+    def _by_hand_words(self, temp: float | None, quiet: bool) -> str:
+        words = "On by hand"
+        if self.state.boost_until is not None:
+            words += f" until {_hhmm(self.state.boost_until)}"
+        if temp is not None:
+            words += f" · heating to {self.target:.0f}°, {temp:.0f}° now"
+        return words + ("" if quiet else " · sharing the boiler with the radiators")
+
     def _heating_words(self, temp: float | None, ready: datetime | None, quiet: bool = True) -> str:
         if temp is not None:
             if self.state.urgent and not quiet:
@@ -387,24 +436,34 @@ class HotWater:
 
     # --- by hand ---------------------------------------------------------
     async def async_boost(self, minutes: int) -> None:
-        """A boost somebody asked for: it runs for so many minutes, whatever
-        the radiators want."""
-        self.state.mine = False
-        self.state.boost_until = dt_util.utcnow() + timedelta(minutes=minutes)
+        """A boost somebody asked for: it runs whatever the radiators want,
+        for so many minutes or until the tank is full."""
+        st = self.state
+        st.mine, st.held_since = False, None
+        st.by_hand, st.boost_until = True, dt_util.utcnow() + timedelta(minutes=minutes)
         await self._send(True)
         self.hub.async_save()
 
     async def async_stop(self) -> None:
-        """Stop the hot water, whoever started it."""
-        self.state.mine, self.state.boost_until = False, None
+        """Turn the hot water off, whoever started it, and keep it off until
+        it's handed back."""
+        st = self.state
+        st.mine = st.by_hand = False
+        st.boost_until, st.held_since = None, dt_util.utcnow()
         if self.on():
             await self._send(False)
         self.hub.async_save()
 
+    async def async_resume(self) -> None:
+        """Hand the hot water back to Hearth after it was turned off by hand."""
+        self.state.held_since = None
+        self._rest_until = None
+        self.hub.async_save()
+
     async def async_shutdown(self) -> None:
         """Home Assistant is stopping: hot water Hearth turned on is turned
-        off rather than left with nobody watching the radiators. A boost
-        asked for by hand runs on, and is ended on time after the restart."""
+        off rather than left with nobody watching the radiators. Hot water on
+        by hand runs on, and is ended after the restart."""
         if self.state.mine and self.on():
             await self._send(False)
             self.state.mine = False
@@ -416,8 +475,12 @@ class HotWater:
             "status": self.status,
             "heating": self.on(),
             "set_by_hearth": self.state.mine,
+            "on_by_hand": self.state.by_hand,
             "boost_until": self.state.boost_until.isoformat() if self.state.boost_until else None,
+            "off_by_hand_since": self.state.held_since.isoformat() if self.state.held_since else None,
             "by": "temperature" if self.tank_temp() is not None else "time",
+            "full_at": self.target if self.sensor else None,
+            "top_up_below": self.reheat_below if self.sensor else None,
             "heat_anyway_below": self.heat_anyway_below if self.sensor else None,
             "tank_sensor": self.sensor,
             "ready_by": list(self.hub.settings.get(CONF_HW_READY) or []),

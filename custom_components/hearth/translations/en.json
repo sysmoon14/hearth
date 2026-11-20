@@ -144,17 +144,21 @@
     },
     "boost_hot_water": {
       "name": "Boost the hot water",
-      "description": "Heat the hot water now, whatever the radiators are doing, for so many minutes.",
+      "description": "Heat the hot water now, whatever the radiators are doing, until the tank is full or the minutes are up.",
       "fields": {
         "minutes": {
           "name": "Minutes",
-          "description": "How long it runs before Hearth turns it off."
+          "description": "The longest it runs. With a tank sensor it stops sooner once the tank is full."
         }
       }
     },
     "stop_hot_water": {
       "name": "Stop the hot water",
-      "description": "Stop heating the hot water, whoever started it. Hearth heats it again when it next wants heat."
+      "description": "Turn the hot water off, whoever started it, and keep it off until it's handed back to Hearth."
+    },
+    "resume_hot_water": {
+      "name": "Hand the hot water back to Hearth",
+      "description": "After the hot water was turned off by hand, let Hearth heat the tank again when it needs it."
     }
   },
   "issues": {

@@ -16,6 +16,7 @@ from .const import (
     HOUSE_HOLIDAY,
     SERVICE_ADD_WARM_UP,
     SERVICE_BOOST_HOT_WATER,
+    SERVICE_RESUME_HOT_WATER,
     SERVICE_STOP_HOT_WATER,
     SERVICE_CANCEL_BOOST,
     SERVICE_SET_HOLIDAY,
@@ -132,7 +133,13 @@ def async_setup_services(hass: HomeAssistant) -> None:
         await tank.hub.async_evaluate()
 
     hass.services.async_register(DOMAIN, SERVICE_BOOST_HOT_WATER, boost_hot_water, HOT_WATER_SCHEMA)
+    async def resume_hot_water(call: ServiceCall) -> None:
+        tank = _hot_water()
+        await tank.async_resume()
+        await tank.hub.async_evaluate()
+
     hass.services.async_register(DOMAIN, SERVICE_STOP_HOT_WATER, stop_hot_water, vol.Schema({}))
+    hass.services.async_register(DOMAIN, SERVICE_RESUME_HOT_WATER, resume_hot_water, vol.Schema({}))
     hass.services.async_register(DOMAIN, SERVICE_SET_HOLIDAY, set_holiday, HOLIDAY_SCHEMA)
     hass.services.async_register(DOMAIN, SERVICE_SET_SCHEDULE, set_schedule, SET_SCHEDULE_SCHEMA)
     hass.services.async_register(DOMAIN, SERVICE_BOOST, boost, BOOST_SCHEMA)

@@ -90,6 +90,14 @@ show_house: false
 title: Upstairs
 ```
 
+The hot water has its own card, which loads with the other. It shows the tank's temperature against its three lines (too cold to wait, top up, full), what it's doing and why, and buttons to boost it, keep it off, or hand it back to Hearth:
+
+```yaml
+type: custom:hearth-hot-water-card
+boost_minutes: 60                   # optional: the Boost button's length
+title: Hot water                    # optional
+```
+
 ## Hot water
 
 Hearth can heat the hot water cylinder too, in the gaps the radiators leave, so the two don't share the boiler for longer than the minute or so it takes to hand over. On the House tab, choose the thermostat's **Call for hot water switch** (Fledge's, on a Nest; any `switch` or `input_boolean` will do). While no radiator room is asking for heat and the tank wants heat, Hearth turns it on; Fledge keeps the thermostat's hot water going while it's on. It starts as soon as the last room stops asking, while Hearth is still calling for heat, so the boiler goes from one to the other without stopping. The moment a room asks, Hearth turns it off, and it doesn't start when a room is due to start warming within 20 minutes.
@@ -104,7 +112,12 @@ When the tank wants heat depends on whether it has a sensor:
 
   If the sensor stops reporting, Hearth goes back to the clock (the times and minutes above) until it reports again. Those settings sit in a folded "If the tank sensor stops working" section on the House tab.
 
-Hot water turned on by hand (the switch, or `hearth.boost_hot_water`) runs whatever the radiators are doing; a boost on the Nest itself isn't seen by Hearth. On Holiday the hot water is off, and is heated before the holiday ends if it has an end. Fledge's switch holds the hot water on for ten minutes at a time, so if Home Assistant stops, the hot water stops within ten minutes; the thermostat's own hot water schedule is never touched, so it can be turned back on by hand.
+**By hand.** The switch is yours as well as Hearth's.
+- **Turned on by hand** (the switch, or `hearth.boost_hot_water`, the Boost button): it runs whatever the radiators are doing, until the tank reaches full. Without a tank sensor it runs for the "heat it for up to" minutes instead (a boost for its own minutes, stopping sooner if the tank is full). Then Hearth carries on as normal.
+- **Turned off by hand** (the switch, or `hearth.stop_hot_water`, the Turn off / Keep off buttons): it stays off, even below "too cold to wait", until it's handed back: `hearth.resume_hot_water` (the Let Hearth decide button), or turning it on by hand. After a day off, Hearth raises it under Settings → Repairs in case it was forgotten. Nothing turns it back on by itself.
+- A boost started on the Nest itself isn't seen by Hearth.
+
+On Holiday the hot water is off, and is heated before the holiday ends if it has an end. Fledge's switch holds the hot water on for ten minutes at a time, so if Home Assistant stops, the hot water stops within ten minutes; the thermostat's own hot water schedule is never touched, so it can be turned back on by hand.
 
 ## Entities
 
@@ -113,7 +126,7 @@ Hot water turned on by hand (the switch, or `hearth.boost_hot_water`) runs whate
 | `climate.<room>` | One per room. `hvac_action` is `heating`, `preheating` (warming up early), `idle` or `off` in every room. Attributes include `status`, `reason`, `problem` (set when a valve, stat or room sensor is offline), `minutes_to_target`, `preheating`, `warm_up_rate` (degrees an hour), `warm_ups`, `schedule`, `next_change_at`, `next_change_temp`, `calling_for_heat`, `kind` and `devices`; radiator rooms also have `preheat_from`. |
 | `select.hearth_house_mode` | Home, Away or Holiday. Point presence automations here. Its attributes carry the boost length and temperature. |
 | `binary_sensor.hearth_radiators_want_heat` | On while the boiler is wanted for the radiators. Its attributes list which rooms are asking. |
-| `water_heater.hearth_hot_water` | There once a Call for hot water switch is chosen. Its state is `heating`, `waiting` (for the radiators), `idle` or `off`. Attributes include `status`, `heating`, `set_by_hearth`, `boost_until`, `by` (`time` or `temperature`), `ready_by`, `next_ready_by`, `minutes_heated`, `minutes_wanted` and `problem`. |
+| `water_heater.hearth_hot_water` | There once a Call for hot water switch is chosen. Its state is `heating`, `waiting` (for the radiators), `idle` or `off`. Attributes include `status`, `heating`, `set_by_hearth`, `on_by_hand`, `boost_until`, `off_by_hand_since`, `by` (`time` or `temperature`), `ready_by`, `next_ready_by`, `minutes_heated`, `minutes_wanted` and `problem`. |
 
 ## Actions
 
@@ -121,8 +134,9 @@ Hot water turned on by hand (the switch, or `hearth.boost_hot_water`) runs whate
 - `hearth.boost`: boost a room, with optional `minutes` and `temperature`.
 - `hearth.cancel_boost`: end a boost early.
 - `hearth.add_warm_up`: tell a room about a warm-up it didn't time itself, with `rise` (degrees) and `minutes`. It counts until the room has seen two of its own.
-- `hearth.boost_hot_water`: heat the hot water now, whatever the radiators are doing, with optional `minutes` (an hour if not given), after which Hearth turns it off.
-- `hearth.stop_hot_water`: stop heating the hot water, whoever started it.
+- `hearth.boost_hot_water`: heat the hot water now, whatever the radiators are doing, with optional `minutes` (an hour if not given); it stops then, or sooner once the tank is full.
+- `hearth.stop_hot_water`: turn the hot water off, whoever started it, and keep it off until it's handed back.
+- `hearth.resume_hot_water`: hand the hot water back to Hearth after it was turned off by hand.
 - `hearth.set_holiday`: put the house on Holiday, with an optional `until` (like `2026-12-28 16:00:00`) when it goes back to Home by itself.
 
 ## When something looks wrong

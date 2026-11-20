@@ -5,8 +5,8 @@
 // Hearth's own actions and entities, the same ones the cards use.
 
 import {
-  VERSION, TICKS, boostLabel, clamp, copy, deg, esc, heating, holidayBack, houseLock, isOff, mins, nowPct, num, preheating, problemOf, reasonOf, statusOf, stripHtml, targetLabel, todayBlocks,
-} from "./hearth-common.js?v=1.0.0b11";
+  VERSION, TICKS, boostLabel, clamp, copy, deg, esc, heating, holidayBack, hotWaterNote, houseLock, isOff, mins, nowPct, num, preheating, problemOf, reasonOf, statusOf, stripHtml, targetLabel, todayBlocks,
+} from "./hearth-common.js?v=1.0.0b12";
 
 const HOUSE = [["home", "Home"], ["away", "Away"], ["holiday", "Holiday"]];
 const MODES = [["auto", "Schedule"], ["heat", "Fixed"], ["off", "Off"]];
@@ -281,8 +281,11 @@ class HearthPanel extends HTMLElement {
         <div class="row between"><span class="caps">Hot water${temp}</span><span class="chip ${chip[0]}">${chip[1]}</span></div>
         <div class="big">${esc(a.status || "")}</div>
         ${a.problem ? `<div class="small" style="color:var(--hp-warn)">${esc(a.problem)}</div>` : ""}
-        <div class="row between flexwrap"><span class="muted small">${a.by === "temperature" ? "Heated by the tank's temperature" : `Ready by ${esc((a.ready_by || []).join(" and ") || "no times set")}`}, when the radiators are quiet</span>
-          <button class="btn" data-act="${a.heating ? "hw-stop" : "hw-boost"}">${a.heating ? "Stop" : "Boost 1 h"}</button></div></div>`);
+        <div class="row between flexwrap"><span class="muted small">${esc(hotWaterNote(a))}</span>
+          <span class="row">${a.off_by_hand_since
+            ? `<button class="btn solid" data-act="hw-resume">Let Hearth decide</button><button class="btn" data-act="hw-boost">Boost 1 h</button>`
+            : a.heating ? `<button class="btn" data-act="hw-stop">Turn off</button>`
+            : `<button class="btn" data-act="hw-stop">Keep off</button><button class="btn" data-act="hw-boost">Boost 1 h</button>`}</span></div></div>`);
     }
     if (ufh.length) {
       const heating = ufh.filter((r) => this._heating(r)).map((r) => r.name);
@@ -793,6 +796,7 @@ class HearthPanel extends HTMLElement {
             </details>` : `
             <div class="caps step">When to heat it</div>
             ${this._clockRows(h, secRow)}`}
+            <div class="kv"><span>By hand<span class="sub">The switch is yours too. Turn it on and the tank heats ${h.hot_water_sensor ? "to full" : `for up to ${Number(h.hot_water_minutes)} minutes`} whatever the radiators are doing, then Hearth carries on. Turn it off and it stays off until you press Let Hearth decide on the Rooms tab. After a day off, Hearth reminds you under Settings → Repairs.</span></span></div>
             <div class="kv"><span>If Hearth or Home Assistant stops<span class="sub">The hot water goes off within ten minutes. To heat it without Hearth, use the boost on the thermostat, or turn the thermostat's own hot water schedule back on: Hearth never changes it.</span></span></div>` : ""}
           </div>
         </section>
@@ -845,12 +849,12 @@ class HearthPanel extends HTMLElement {
     if (!h.hot_water_switch) return "Hearth isn't heating the hot water. Choose the thermostat's Call for hot water switch below and it will, fitting it around the radiators.";
     if (h.hot_water_sensor) {
       const floor = Math.min(Number(h.hot_water_heat_anyway_below ?? 40), Number(h.hot_water_reheat_below) - 1);
-      return `Hearth keeps the tank between ${deg(h.hot_water_reheat_below)} and ${deg(h.hot_water_target)}, heating it in the gaps when no room is using the radiators. If it ever falls below ${deg(floor)}, it doesn't wait: the boiler heats the rooms and the tank together. A boost you start yourself always runs.`;
+      return `Hearth keeps the tank between ${deg(h.hot_water_reheat_below)} and ${deg(h.hot_water_target)}, heating it in the gaps when no room is using the radiators. If it ever falls below ${deg(floor)}, it doesn't wait: the boiler heats the rooms and the tank together. Turned on by hand, it heats to ${deg(h.hot_water_target)} and Hearth carries on; turned off by hand, it stays off until you hand it back.`;
     }
     const times = h.hot_water_ready_by || [];
     if (!times.length) return "No times are set, so Hearth won't heat the tank.";
     const list = times.length > 1 ? `${times.slice(0, -1).join(", ")} and ${times[times.length - 1]}` : times[0];
-    return `Hearth heats the tank for up to ${Number(h.hot_water_minutes)} minutes before ${list}, in a gap when no room is using the radiators. A boost you start yourself always runs.`;
+    return `Hearth heats the tank for up to ${Number(h.hot_water_minutes)} minutes before ${list}, in a gap when no room is using the radiators. Turned off by hand, it stays off until you hand it back.`;
   }
 
   // The clock settings: the plan without a tank sensor, the fallback with one.
@@ -1093,6 +1097,7 @@ class HearthPanel extends HTMLElement {
       case "remove": this._removeRoom(room); return;
       case "hw-boost": this._call("hearth", "boost_hot_water", { minutes: 60 }); return;
       case "hw-stop": this._call("hearth", "stop_hot_water", {}); return;
+      case "hw-resume": this._call("hearth", "resume_hot_water", {}); return;
       case "house-save": this._saveHouse(); return;
       case "house-discard": this._house = null; this._render(); return;
       case "hist-range": this._histRange = Number(el.dataset.hours); this._render(); return;
